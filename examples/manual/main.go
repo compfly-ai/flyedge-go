@@ -46,6 +46,10 @@ func run() error {
 		Content:   flyedge.Content{Full: prompt},
 		Operation: flyedge.Operation{Type: "chat.completions", ModelID: "claude-haiku-4-5"},
 	}); err != nil {
+		if ke, ok := flyedge.AsKillSwitchError(err); ok {
+			fmt.Printf("KILLED by operator: %s (kill switch always enforces, even fail-open)\n", ke.Error())
+			return nil
+		}
 		if de, ok := flyedge.AsDenyError(err); ok {
 			fmt.Printf("BLOCKED by policy: %s\n", de.Decision.Reason)
 			return nil

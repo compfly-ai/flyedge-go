@@ -327,6 +327,16 @@ caller decides whether/how to print it (the explicit replacement for Python's au
   DENY** — Claude's `fetch_url(example.com)` was denied (`external_service_denied`) and never ran.
 - **examples/langchaingo**: the same wrap governs a third framework (langchaingo) with no
   framework-specific code — range confirmed across raw Anthropic SDK, raw OpenAI SDK, and langchaingo.
+
+### post_llm + streaming (2026-07-06, branch feat/flyedge-go-postllm)
+- `WrapRoundTripper(base, WithResponseCheck())` adds response-side (post_llm) inspection.
+  **Non-streaming responses are BLOCKED** on a post_llm deny (buffer → extract completion →
+  CheckModelResponse → return *DenyError, drop the response). **Streaming (SSE) responses are
+  MONITORED**: a streamMonitor tees bytes to the caller unchanged and runs one post_llm check on
+  the accumulated completion at stream close (record/audit) — already-sent tokens can't be
+  retracted, so streaming is honestly monitor-not-block. Response extractors + SSE delta parsing
+  for both Anthropic and OpenAI. Verified live: agent with both stages → "2 checks — 2 allowed"
+  (pre_llm request + post_llm response); unit tests cover non-stream block + stream monitor.
 5. **Anthropic SDK adapter + reference agent.** ✅ **DONE + live E2E (2026-07-06, pulled ahead of M2-4).**
    `adapters/anthropic` — `feanthropic.Guard(g)` returns an `option.RequestOption` (SDK-native
    middleware) that runs a pre_llm flyedge check on each Messages request; extracts system+messages

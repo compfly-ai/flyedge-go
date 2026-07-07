@@ -2,6 +2,9 @@ package flyedge_test
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
 	"os"
 	"testing"
 	"time"
@@ -55,4 +58,66 @@ func TestLiveCheck(t *testing.T) {
 	t.Logf("benign → action=%s reason=%s policy_version=%s request_id=%s",
 		dec.Action, dec.Reason, dec.PolicyVersion, dec.RequestID)
 	t.Logf("SIGNATURE ACCEPTED by prism — Go signing is wire-compatible")
+}
+
+// TestLiveLifecycle verifies the cloud lifecycle POSTs (connect + telemetry) are accepted by prism.
+// Env-gated like TestLiveCheck.
+func TestLiveLifecycle(t *testing.T) {
+	if os.Getenv("FLYEDGE_LIVE") == "" {
+		t.Skip("set FLYEDGE_LIVE=1 (+ COMPFLY_* + running stack)")
+	}
+	cfg := flyedge.LoadEnv()
+	cfg.Timeout = 15 * time.Second
+	g, err := flyedge.New(cfg, flyedge.WithCloudTelemetry(0))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer g.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// connect: register a manifest (presence + seeding)
+	if err := g.Connect(ctx, flyedge.ManifestInfo{
+		Framework: "flyedge-go-test", Tools: []string{"fetch_url"}, Models: []string{"claude-haiku-4-5"}, Environment: "dev",
+	}); err != nil {
+		t.Fatalf("Connect (prism rejected the manifest?): %v", err)
+	}
+	t.Log("CONNECT accepted by prism")
+
+	// a check produces a telemetry event; Close flushes it to /v1/flyedge/telemetry
+	_, _ = g.Check(ctx, flyedge.CheckRequest{SessionID: "lifecycle", Stage: flyedge.StagePreLLM,
+		Content: flyedge.Content{Full: "hello"}, Operation: flyedge.Operation{Type: "chat.completions", ModelID: "claude-haiku-4-5"}})
+	if err := g.Close(); err != nil {
+		t.Fatalf("Close/telemetry flush (prism rejected telemetry?): %v", err)
+	}
+	t.Log("TELEMETRY batch flushed + accepted by prism")
+}
+
+// TestLiveProxyMode routes an Anthropic call through prism /v1/proxy (in-band). Env-gated.
+func TestLiveProxyMode(t *testing.T) {
+	if os.Getenv("FLYEDGE_LIVE") == "" {
+		t.Skip("set FLYEDGE_LIVE=1")
+	}
+	cfg := flyedge.LoadEnv()
+	cfg.ProxyMode = true
+	cfg.Timeout = 20 * time.Second
+	g, err := flyedge.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer g.Close()
+	hc := &http.Client{Transport: g.WrapRoundTripper(http.DefaultTransport), Timeout: 25 * time.Second}
+	req, _ := http.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages",
+		strings.NewReader(`{"model":"claude-haiku-4-5","max_tokens":64,"messages":[{"role":"user","content":"say hi in 3 words"}]}`))
+	req.Header.Set("x-api-key", os.Getenv("ANTHROPIC_API_KEY"))
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("content-type", "application/json")
+	resp, err := hc.Do(req)
+	if err != nil {
+		t.Fatalf("proxy do: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	t.Logf("in-band proxy → HTTP %d: %.200s", resp.StatusCode, string(b))
 }

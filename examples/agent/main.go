@@ -47,7 +47,7 @@ func run() error {
 	fmt.Printf("flyedge guard: DID=%s mode=%s\n", guard.DID(), envOr("FLYEDGE_MODE", "warn"))
 
 	// 2. ONE governed HTTP client — the same wrap works for every HTTP LLM SDK.
-	hc := &http.Client{Transport: guard.WrapRoundTripper(http.DefaultTransport)}
+	hc := &http.Client{Transport: guard.WrapRoundTripper(http.DefaultTransport, flyedge.WithResponseCheck())}
 
 	prompt := envOr("PROMPT", "What are your store hours?")
 	fmt.Printf("provider=%s prompt=%q\n", envOr("PROVIDER", "anthropic"), prompt)

@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 )
 
 // WrapRoundTripper returns an http.RoundTripper that runs a flyedge pre_llm policy check before
@@ -21,17 +23,22 @@ import (
 // On a policy Deny the RoundTrip returns a *DenyError (wrapped by net/http in *url.Error, still
 // reachable via errors.As), and the provider is never called. Requests to hosts without a
 // registered extractor pass through unchecked.
-func (g *Guard) WrapRoundTripper(base http.RoundTripper) http.RoundTripper {
+func (g *Guard) WrapRoundTripper(base http.RoundTripper, opts ...WrapOption) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return &guardRoundTripper{guard: g, base: base, session: "sess-" + randHex()}
+	rt := &guardRoundTripper{guard: g, base: base, session: "sess-" + randHex()}
+	for _, o := range opts {
+		o(rt)
+	}
+	return rt
 }
 
 type guardRoundTripper struct {
-	guard   *Guard
-	base    http.RoundTripper
-	session string
+	guard         *Guard
+	base          http.RoundTripper
+	session       string
+	checkResponse bool // when true, also run a post_llm check on responses (WithResponseCheck)
 }
 
 func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -49,6 +56,12 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	req.Body = io.NopCloser(bytes.NewReader(body))
 	req.ContentLength = int64(len(body))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+
+	// In-band proxy mode: route the ACTUAL call through prism /v1/proxy (prism enforces inline and
+	// forwards to the provider), instead of the out-of-band /check + direct forward.
+	if t.guard.cfg.ProxyMode {
+		return t.proxyForward(req, body)
+	}
 
 	// Prefer a per-request session (set via ContextWithSession, e.g. by the proxy from a header);
 	// fall back to this wrap's session for a single long-lived SDK client.
@@ -70,6 +83,69 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	})
 	if err != nil {
 		return nil, err // Deny/*DenyError → the SDK call fails; provider not contacted
+	}
+
+	resp, rerr := t.base.RoundTrip(req)
+	if rerr != nil || !t.checkResponse || resp == nil {
+		return resp, rerr
+	}
+	return t.inspectResponse(req, resp, session, model)
+}
+
+// inspectResponse runs the post_llm check on the model response. Non-streaming responses are
+// buffered, checked, and BLOCKED on deny (returns *DenyError, drops the response). Streaming (SSE)
+// responses are wrapped so the completion is checked when the stream ends — monitor + record only,
+// since already-streamed tokens can't be retracted.
+func (t *guardRoundTripper) inspectResponse(req *http.Request, resp *http.Response, session, model string) (*http.Response, error) {
+	host := req.URL.Host
+
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		ctx := req.Context()
+		resp.Body = newStreamMonitor(resp.Body, host, func(completion string) {
+			if completion != "" {
+				_, _ = t.guard.CheckModelResponse(ctx, session, model, completion) // record/audit
+			}
+		})
+		return resp, nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	completion := respExtractorFor(host)(body)
+	if completion != "" {
+		if _, cerr := t.guard.CheckModelResponse(req.Context(), session, model, completion); cerr != nil {
+			return nil, cerr // post_llm Deny → drop the response; caller gets *DenyError
+		}
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body)) // restore for the caller
+	return resp, nil
+}
+
+// proxyForward rewrites an LLM request to route through prism /v1/proxy: the original provider URL
+// goes in X-Destination, the body is DID-signed, and prism enforces inline then forwards to the
+// provider and streams the response back. The provider's own auth headers pass through unchanged.
+// A policy deny surfaces as prism's HTTP error status (the SDK sees it as an API error).
+func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.Response, error) {
+	dest := req.URL.String()
+	prismURL, err := url.Parse(strings.TrimRight(t.guard.cfg.APIURL, "/") + "/v1/proxy")
+	if err != nil {
+		return nil, err
+	}
+	req.URL = prismURL
+	req.Host = prismURL.Host
+	req.Header.Set("X-Destination", dest)
+	req.Header.Set("X-CompFly-Stage", string(StagePreLLM))
+	if t.guard.signer != nil {
+		hdrs, err := t.guard.signer.Sign(body, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range hdrs {
+			req.Header.Set(k, v)
+		}
 	}
 	return t.base.RoundTrip(req)
 }

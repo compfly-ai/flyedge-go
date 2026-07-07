@@ -73,6 +73,13 @@ func (e *HTTPEnforcer) Check(ctx context.Context, req CheckRequest) (Decision, e
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// A full-scope kill switch arrives as 403 {code:"KILL_SWITCH", details:{...}}. Surface it
+		// as a typed KilledError so the Guard can always block it, bypassing fail-open.
+		if resp.StatusCode == http.StatusForbidden {
+			if ke := parseKillError(raw); ke != nil {
+				return Decision{}, ke
+			}
+		}
 		return Decision{}, fmt.Errorf("enforce: %s → %d: %s", checkPath, resp.StatusCode, string(raw))
 	}
 
@@ -81,4 +88,63 @@ func (e *HTTPEnforcer) Check(ctx context.Context, req CheckRequest) (Decision, e
 		return Decision{}, fmt.Errorf("enforce: decode response: %w (body: %s)", err, string(raw))
 	}
 	return cr.normalize(), nil
+}
+
+// KilledError is returned by Check when the gateway rejects a request with a full-scope kill
+// switch (HTTP 403 code=KILL_SWITCH). It is distinct from a policy deny so the Guard can enforce it
+// unconditionally (a kill must never be bypassed by fail-open).
+type KilledError struct{ Kill KillInfo }
+
+func (e *KilledError) Error() string {
+	return "flyedge: kill switch active: " + e.Kill.Reason
+}
+
+// parseKillError returns a *KilledError if the 403 body is a KILL_SWITCH error, else nil.
+func parseKillError(raw []byte) *KilledError {
+	var fe struct {
+		Code    string `json:"code"`
+		Details struct {
+			KillID string `json:"kill_id"`
+			Scope  string `json:"scope"`
+			Target string `json:"target"`
+			Reason string `json:"reason"`
+		} `json:"details"`
+	}
+	if json.Unmarshal(raw, &fe) != nil || fe.Code != "KILL_SWITCH" {
+		return nil
+	}
+	return &KilledError{Kill: KillInfo{
+		KillID: fe.Details.KillID, Scope: fe.Details.Scope,
+		Target: fe.Details.Target, Reason: fe.Details.Reason,
+	}}
+}
+
+// PostSigned signs and POSTs body to an arbitrary flyedge path (e.g. /v1/flyedge/connect,
+// /v1/flyedge/telemetry), returning the response bytes. Reuses the same signing as Check so the
+// connect + telemetry lifecycle calls authenticate identically. A non-2xx is an error.
+func (e *HTTPEnforcer) PostSigned(ctx context.Context, path string, body []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if e.signer != nil {
+		hdrs, err := e.signer.Sign(body, e.now())
+		if err != nil {
+			return nil, fmt.Errorf("enforce: sign: %w", err)
+		}
+		for k, v := range hdrs {
+			req.Header.Set(k, v)
+		}
+	}
+	resp, err := e.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("enforce: call %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("enforce: %s → %d: %s", path, resp.StatusCode, string(raw))
+	}
+	return raw, nil
 }

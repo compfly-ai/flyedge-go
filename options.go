@@ -1,6 +1,8 @@
 package flyedge
 
 import (
+	"time"
+
 	"github.com/compfly-ai/flyedge-go/enforce"
 	"github.com/compfly-ai/flyedge-go/identity"
 	"github.com/compfly-ai/flyedge-go/telemetry"
@@ -35,6 +37,17 @@ func WithEnforcer(e enforce.Enforcer) Option {
 // overriding the default in-memory Recorder.
 func WithTelemetry(t telemetry.Telemetry) Option {
 	return func(g *Guard) error { g.tel = t; return nil }
+}
+
+// WithCloudTelemetry ships protection events to the gateway (/v1/flyedge/telemetry) via a batched,
+// owned-goroutine sink (flushed on Close), in addition to keeping Report() working locally.
+// interval is the flush cadence (0 → 5s). Requires the default signed HTTP enforcer.
+func WithCloudTelemetry(interval time.Duration) Option {
+	return func(g *Guard) error {
+		g.cloudTelemetry = true
+		g.telInterval = interval
+		return nil
+	}
 }
 
 // WithMode overrides Config.Mode.

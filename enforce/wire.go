@@ -95,16 +95,26 @@ func (r *CheckRequest) fillDefaults() {
 	}
 }
 
+// KillInfo describes an active kill switch matching a request. Full-scope kills arrive as a 403
+// (see KilledError); non-full (model/tool) kills arrive in a 200 response's `kills` array.
+type KillInfo struct {
+	KillID string `json:"kill_id"`
+	Scope  string `json:"scope"` // full | model | tool | provider
+	Target string `json:"target"`
+	Reason string `json:"reason"`
+}
+
 // checkResponse is the raw /check response envelope.
 type checkResponse struct {
-	Decision       string   `json:"decision"`
-	Reason         string   `json:"reason"`
-	Message        string   `json:"message"`
-	Warnings       []string `json:"warnings"`
-	PolicyVersion  string   `json:"policy_version"`
-	RequestID      string   `json:"request_id"`
-	SignalsPresent []string `json:"signals_present"`
-	SignalsMissing []string `json:"signals_missing"`
+	Decision       string     `json:"decision"`
+	Reason         string     `json:"reason"`
+	Message        string     `json:"message"`
+	Warnings       []string   `json:"warnings"`
+	PolicyVersion  string     `json:"policy_version"`
+	RequestID      string     `json:"request_id"`
+	SignalsPresent []string   `json:"signals_present"`
+	SignalsMissing []string   `json:"signals_missing"`
+	Kills          []KillInfo `json:"kills"`
 }
 
 // Decision is the typed, normalized result the caller sees.
@@ -116,6 +126,7 @@ type Decision struct {
 	PolicyVersion string
 	RequestID     string
 	Signals       Signals
+	Kills         []KillInfo // non-full-scope kills matching this request (model/tool)
 }
 
 // Signals carries the capability signals the server reported present/missing (audit trail).
@@ -141,5 +152,6 @@ func (r checkResponse) normalize() Decision {
 		PolicyVersion: r.PolicyVersion,
 		RequestID:     r.RequestID,
 		Signals:       Signals{Present: r.SignalsPresent, Missing: r.SignalsMissing},
+		Kills:         r.Kills,
 	}
 }

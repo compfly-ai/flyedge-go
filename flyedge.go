@@ -6,6 +6,8 @@ package flyedge
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -51,12 +53,40 @@ func (e *DenyError) Error() string {
 	return "flyedge: denied"
 }
 
+// KillInfo describes an active kill switch (re-exported from enforce).
+type KillInfo = enforce.KillInfo
+
+// KillSwitchError is returned when a request is blocked by an operator kill switch — distinct from
+// a policy DenyError because a kill ALWAYS enforces, bypassing FailMode (a kill can never be
+// fail-open'd through). Kills carries the matching kill switch(es).
+type KillSwitchError struct {
+	Kills []KillInfo
+}
+
+func (e *KillSwitchError) Error() string {
+	if len(e.Kills) > 0 {
+		return "flyedge: kill switch active: " + e.Kills[0].Reason
+	}
+	return "flyedge: kill switch active"
+}
+
+// AsKillSwitchError reports whether err is a *KillSwitchError.
+func AsKillSwitchError(err error) (*KillSwitchError, bool) {
+	var ke *KillSwitchError
+	if errors.As(err, &ke) {
+		return ke, true
+	}
+	return nil, false
+}
+
 // Guard is the protection handle. Construct once with New, pass it explicitly, Close when done.
 type Guard struct {
-	cfg      Config
-	signer   identity.Signer
-	enforcer enforce.Enforcer
-	tel      telemetry.Telemetry
+	cfg            Config
+	signer         identity.Signer
+	enforcer       enforce.Enforcer
+	tel            telemetry.Telemetry
+	cloudTelemetry bool          // WithCloudTelemetry: ship events to /v1/flyedge/telemetry
+	telInterval    time.Duration // flush interval for cloud telemetry
 }
 
 // New builds a Guard from cfg (+ options). If a key is configured it builds a Signer; otherwise the
@@ -83,11 +113,29 @@ func New(cfg Config, opts ...Option) (*Guard, error) {
 	if g.enforcer == nil {
 		g.enforcer = enforce.NewHTTPEnforcer(cfg.APIURL, g.signer, cfg.Timeout)
 	}
-	// Default telemetry: in-memory recorder so Report() works with no wiring.
+	// Telemetry: cloud batcher if requested (ship to /v1/flyedge/telemetry via the signed enforcer),
+	// an injected sink if one was set via WithTelemetry, else an in-memory recorder. Cloud wiring
+	// happens here (post-enforcer) so the sender can reuse the enforcer's signing.
+	if g.tel == nil && g.cloudTelemetry {
+		if sp, ok := g.enforcer.(signedPoster); ok {
+			sender := func(ctx context.Context, body []byte) error {
+				_, err := sp.PostSigned(ctx, "/v1/flyedge/telemetry", body)
+				return err
+			}
+			g.tel = telemetry.NewBatched(sender, "guard-"+randID(), g.telInterval)
+		}
+	}
 	if g.tel == nil {
 		g.tel = telemetry.NewRecorder()
 	}
 	return g, nil
+}
+
+// randID returns a short random id for a guard-level telemetry session.
+func randID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // Check runs a request through the policy decision point and returns the typed Decision. On a
@@ -103,7 +151,12 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	var retErr error
 	ev := telemetry.Event{Stage: string(req.Stage), Model: req.Operation.ModelID, LatencyMS: latencyMS, OccurredAt: start}
 
+	var killed *enforce.KilledError
 	switch {
+	case errors.As(cerr, &killed):
+		// Kill switch ALWAYS enforces — never fail-open. Distinct typed error.
+		result = Decision{Action: ActionDeny, Reason: "kill_switch", Message: killed.Error(), Kills: []KillInfo{killed.Kill}}
+		retErr = &KillSwitchError{Kills: result.Kills}
 	case cerr != nil:
 		ev.Err = cerr.Error()
 		if g.cfg.FailMode == FailClosed {
@@ -113,6 +166,14 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 			// fail open: allow (availability over strictness) — but the error is recorded.
 			result = Decision{Action: ActionAllow, Reason: "fail_open", Message: cerr.Error()}
 		}
+	case len(dec.Kills) > 0:
+		// Non-full-scope kill (model/tool) arrived in a 200 response — also always enforces.
+		result = dec
+		result.Action = ActionDeny
+		if result.Reason == "" {
+			result.Reason = "kill_switch"
+		}
+		retErr = &KillSwitchError{Kills: dec.Kills}
 	case dec.Action == ActionDeny:
 		result = dec
 		retErr = &DenyError{Decision: dec}
