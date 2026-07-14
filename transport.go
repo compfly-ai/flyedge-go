@@ -41,6 +41,16 @@ type guardRoundTripper struct {
 	checkResponse bool // when true, also run a post_llm check on responses (WithResponseCheck)
 }
 
+// resolveSession prefers a per-request session (set via ContextWithSession,
+// e.g. by the proxy from a header) and falls back to this wrap's session for
+// a single long-lived SDK client.
+func (t *guardRoundTripper) resolveSession(req *http.Request) string {
+	if s := sessionFromContext(req.Context()); s != "" {
+		return s
+	}
+	return t.session
+}
+
 func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	ex := extractorFor(req.URL.Host, req.URL.Path)
 	if ex == nil || req.Body == nil {
@@ -63,12 +73,7 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		return t.proxyForward(req, body)
 	}
 
-	// Prefer a per-request session (set via ContextWithSession, e.g. by the proxy from a header);
-	// fall back to this wrap's session for a single long-lived SDK client.
-	session := t.session
-	if s := sessionFromContext(req.Context()); s != "" {
-		session = s
-	}
+	session := t.resolveSession(req)
 
 	prompt, model := ex(body)
 	_, err = t.guard.Check(req.Context(), CheckRequest{
@@ -138,6 +143,15 @@ func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.
 	req.Host = prismURL.Host
 	req.Header.Set("X-Destination", dest)
 	req.Header.Set("X-CompFly-Stage", string(StagePreLLM))
+	// Session correlation: the same session id this wrap stamps on its /check
+	// telemetry, so prism keys its rows to the real session instead of minting
+	// a fresh id per request. NOTE: a client-provided session id shifts prism's
+	// execution-mode classification (autonomous → interactive), which feeds
+	// policy evaluation — a known, accepted behavior change. An explicit header
+	// set by the caller wins.
+	if req.Header.Get("X-Session-ID") == "" {
+		req.Header.Set("X-Session-ID", t.resolveSession(req))
+	}
 	if t.guard.signer != nil {
 		hdrs, err := t.guard.signer.Sign(body, time.Now())
 		if err != nil {
