@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/compfly-ai/flyedge-go/simulation"
 )
 
 // sdkVersion identifies this SDK in the manifest + telemetry.
@@ -39,6 +41,16 @@ type ManifestInfo struct {
 func (g *Guard) Connect(ctx context.Context, info ManifestInfo) error {
 	g.pollMu.Lock()
 	g.manifestInfo = info
+	// Build the simulation controller (unless opted out) + wire the poller's sim hook to it, so an
+	// active run makes this agent an observe-mode target with no extra caller code.
+	if g.simEnabled && g.simCtl == nil {
+		fw := info.Framework
+		if fw == "" {
+			fw = sdkVersion
+		}
+		g.simCtl = simulation.New(fw)
+		g.onSimChange = func(sc *SimulationConfig) { g.simCtl.OnConfigChange(toSimConfig(sc)) }
+	}
 	g.pollMu.Unlock()
 	if err := g.connectOnce(ctx); err != nil {
 		return err

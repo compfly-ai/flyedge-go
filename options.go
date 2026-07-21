@@ -79,3 +79,11 @@ func WithModeChangeHandler(fn func(old, cur ModelMode)) Option {
 func WithManifestRefreshHandler(fn func()) Option {
 	return func(g *Guard) error { g.onManifestRefresh = fn; return nil }
 }
+
+// WithSimulation enables or disables the simulation client (default: enabled). When disabled, the
+// agent will not act as a simulation / eval target even if the platform starts a run against it —
+// the config poller still tracks the simulation block, but no telemetry is streamed and
+// protection is never bypassed.
+func WithSimulation(enabled bool) Option {
+	return func(g *Guard) error { g.simEnabled = enabled; return nil }
+}
