@@ -59,3 +59,23 @@ func WithMode(m Mode) Option {
 func WithFailMode(f FailMode) Option {
 	return func(g *Guard) error { g.cfg.FailMode = f; return nil }
 }
+
+// WithHeartbeat overrides the config-poll interval. By default the cadence comes from the
+// ConnectResponse (heartbeat_interval_seconds), falling back to 30s. Set a shorter interval to pick
+// up model-mode / simulation changes faster (e.g. during local testing).
+func WithHeartbeat(interval time.Duration) Option {
+	return func(g *Guard) error { g.pollInterval = interval; return nil }
+}
+
+// WithModeChangeHandler registers a callback fired when the poller observes a change to the agent's
+// model_mode (check/passthrough/gateway). Useful for logging or reacting to a mode flip.
+func WithModeChangeHandler(fn func(old, cur ModelMode)) Option {
+	return func(g *Guard) error { g.onModeChange = fn; return nil }
+}
+
+// WithManifestRefreshHandler overrides what happens when prism sets manifest_refresh_required. The
+// default is to re-send the manifest (reconnect); provide a handler to customize (e.g. rebuild the
+// manifest from live introspection first).
+func WithManifestRefreshHandler(fn func()) Option {
+	return func(g *Guard) error { g.onManifestRefresh = fn; return nil }
+}

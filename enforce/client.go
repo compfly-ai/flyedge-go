@@ -119,6 +119,38 @@ func parseKillError(raw []byte) *KilledError {
 	}}
 }
 
+// GetSigned signs and GETs path (empty body), attaching extra request headers (e.g. the X-Agent-*
+// heartbeat headers on /v1/flyedge/config). The signature is computed over the empty body, matching
+// prism's SHA-256(ts‖body) scheme for a body-less request. A non-2xx is an error.
+func (e *HTTPEnforcer) GetSigned(ctx context.Context, path string, headers map[string]string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if e.signer != nil {
+		hdrs, err := e.signer.Sign(nil, e.now())
+		if err != nil {
+			return nil, fmt.Errorf("enforce: sign: %w", err)
+		}
+		for k, v := range hdrs {
+			req.Header.Set(k, v)
+		}
+	}
+	resp, err := e.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("enforce: call %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("enforce: %s → %d: %s", path, resp.StatusCode, string(raw))
+	}
+	return raw, nil
+}
+
 // PostSigned signs and POSTs body to an arbitrary flyedge path (e.g. /v1/flyedge/connect,
 // /v1/flyedge/telemetry), returning the response bytes. Reuses the same signing as Check so the
 // connect + telemetry lifecycle calls authenticate identically. A non-2xx is an error.

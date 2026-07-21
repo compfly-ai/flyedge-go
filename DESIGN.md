@@ -362,3 +362,150 @@ Each milestone is independently runnable against the local stack (the auth/LEAD/
 - **Signing prehash**: confirm prism verifies `Ed25519.Sign(SHA-256(ts||body))` (prehash) vs
   PureEdDSA over the same bytes — the map says prehash; the M1 test nails it against the live verifier.
 - Module path / repo (deferred): `github.com/compfly-ai/flyedge-go`? or `flyedge/go` subtree?
+
+---
+
+## 13. Simulation layer + config poller — design (Phase A + B)
+
+**Status:** design — Phase 0 review gate (2026-07-20). **Behavioral source of truth:** the Python
+`flyedge/simulation/` subsystem + prism `src/flyedge/` (`simulation_config.rs`, `config.rs`,
+`simulation_telemetry.rs`, `handlers.rs`) + agent-eval (the driver).
+
+### 13.0 Why
+The simulation / attack-injection vertical is **built and wired everywhere except Go**: agent-eval
+`PUT /internal/v1/agents/{id}/simulation` → prism → Redis `sim:config:{agent}` → SDK polls
+`GET /v1/flyedge/config.simulation` → SDK middlewares + WS `/v1/simulation/telemetry` → prism →
+Redis pub/sub `sim:telemetry:{runId}` → eval-runner (4-state outcomes). Today a **Go agent cannot be
+a simulation/red-team target** — `flyedge-go` never polls `/config` and has no simulation client.
+Closing that is the priority; it also lands the config poller that §7 already promised but never built.
+
+### 13.1 Frozen wire additions (server already speaks these)
+- **`GET /v1/flyedge/config`** → `FlyedgeConfigResponse` (fields omitted when null): `simulation?`,
+  `model_mode? ∈ {check,passthrough,gateway}`, `manifest_refresh_required?`,
+  `heartbeat_interval_seconds?`. Heartbeat headers on the request: `X-Agent-Heartbeat: 1`,
+  `X-Agent-Manifest-Hash`, `X-Agent-Hostname`. Config is looked up by **agent slug**.
+- **`simulation`** = `{active, run_id, middlewares[], telemetry_jwt, telemetry_url,
+  protection_disabled, extra}`. `extra.attack_injector` carries `{mode, tier, profile, attack_config}`.
+- **`GET /v1/simulation/telemetry`** (WS): `Authorization: Bearer <telemetry_jwt>` (HS256, run_id in
+  claims, bounded to JWT TTL). Each text message is a `RuntimeEvent` JSON, republished to Redis
+  `sim:telemetry:{run_id}`.
+- **`RuntimeEvent`** (Python `simulation/types.py`): `event_id, run_id, prompt_id, timestamp,
+  component_type, component_name` + optional `framework, llm_messages, llm_model, llm_response,
+  llm_tool_calls, tool_name, tool_args, tool_result, tool_error, retriever_query, retriever_results,
+  flags[], injection_id/strategy/target/sophistication/chain/tier, agent_profile`. Values truncated
+  at 4096 chars; docs/tool_calls capped at 20. `prompt_id` correlates to prism's
+  `X-Simulation-Prompt-Id` response header.
+
+### 13.2 Phase A — config heartbeat poller (the dependency)
+An **owned goroutine** (§7's "config poller", finally built), started when `Connect` succeeds
+(`ConnectResponse` returns `heartbeat_interval_seconds`; default 5s, matching the Python client):
+
+```go
+// internal to Guard; no new required caller code.
+func (g *Guard) startConfigPoll(interval time.Duration)  // owned; stopped by Close()
+func (g *Guard) ModelMode() ModelMode                     // check|passthrough|gateway accessor
+```
+Each tick: signed `GET /config` (signature over `SHA-256(ts‖"")` — empty GET body) with the three
+`X-Agent-*` headers → parse response → (a) hash the `simulation` sub-object; on change hand it to the
+sim controller (§13.3); (b) on `model_mode` change fire `WithModeChangeHandler` + update
+`ModelMode()`; (c) on `manifest_refresh_required` re-call `Connect` (default) or `WithManifestRefreshHandler`.
+Options: `WithHeartbeat(interval)`, `WithModeChangeHandler(func(old,new ModelMode))`,
+`WithManifestRefreshHandler(func())`, `WithSimulation(false)` to opt a build out entirely.
+
+### 13.3 Phase B1 — simulation client core (observe-capable target)
+The poller drives an internal `simController` — **simulation is automatic** for any agent that built a
+`Guard` and installed the transport wrap; no extra caller code. Mirrors Python
+`SimulationConfigHandler`:
+
+- **Lifecycle** state machine `INACTIVE→STARTING→ACTIVE→STOPPING`. `on config change`: absent/invalid
+  → deactivate; same `run_id` → hot-swap injector tier; changed `run_id` → restart. `Close()` forces
+  deactivate + restore.
+- **WS transport** (`simulation/ws.go`, mirrors `ws_transport.py`): dedicated goroutine, connect with
+  `Authorization: Bearer <telemetry_jwt>`, bounded send queue (drop-on-overflow), batch drain,
+  exp-backoff reconnect (1→30s) until stop. **Heartbeat cadence:** RuntimeEvent every 5s for the
+  first 60s, then 30s keepalive — deliberately beats the eval-runner subscriber race.
+- **`protection_disabled`**: while active, the Guard **short-circuits `Check*` to Allow** (skips the
+  `/check` round-trip) so the agent's raw behavior is measured; restores real checking on deactivate.
+  (Consistent with prism, which itself returns `allow`/`simulation_bypass` when protection_disabled —
+  this is the one sanctioned suspension of "server deny always enforces".)
+- **`behavior_monitor`** (`simulation/behavior.go`): observe-only flag detectors over
+  content/args/result (`credential_exposure`, `external_url_in_tool_args`, `privilege_escalation_pattern`,
+  `code_execution_pattern`, …), stamped onto `RuntimeEvent.flags`.
+- **`telemetry`**: emit a `RuntimeEvent` per intercepted LLM/tool operation the Guard already sees.
+
+### 13.4 Phase B2 — attack injector (the gothonic injection model)
+The key design decision: **Go doesn't monkeypatch — it flips the interceptors it already owns from
+observe to mutate.** The Guard already sits in the LLM-request path (`WrapRoundTripper`) and the
+tool path (`CheckToolCall`/`CheckToolResponse`); in attack mode those same seams rewrite payloads.
+Python strategy → Go interception point:
+
+| Python strategy (`attack_schedule.py`) | Go injection point |
+|---|---|
+| `config_inject` (adversarial system message into LLM `messages`) | `WrapRoundTripper` **request rewrite** — the wrap already parses Anthropic/OpenAI bodies for pre_llm; in attack mode it *injects* a system message before signing/forwarding |
+| `tool_poison` / `error_inject` (mutate tool result/error) | tool path — `CheckToolResponse` returns a **poisoned/replacement** result in attack mode |
+| `rag_harvest` / `memory_poison` | **only** if the agent routes retrieval/memory through explicit Guard hooks (`InterceptRetrieval`/`InterceptMemory`) — no auto-injection, documented as opt-in |
+
+This is **more bounded and honest than Python's pervasive patch**: only flows the caller actually
+routes through the Guard can be injected (LLM messages always; tools if guarded; RAG/memory only via
+explicit hooks). `ComponentProfiler` (`simulation/profiler.go`) builds the `agent_profile` from the
+`Connect` manifest (tools/models) + observed operations and emits it in observe mode; payloads are
+static templates keyed by strategy × sophistication L1–L4 (`attack_payloads.py`), placeholders
+resolved from the profile. Tier transitions hot-swap via the poller's config-update path.
+
+### 13.5 Packages + exported surface
+```
+flyedge-go/
+  config_poll.go          // owned config heartbeat goroutine (Phase A)
+  simulation/             // Phase B — internal controller, no core dep leakage
+     controller.go        //   state machine, reacts to config.simulation
+     ws.go                //   telemetry WebSocket transport (Bearer jwt, backoff, heartbeat burst)
+     behavior.go          //   observe-only flag detectors
+     injector.go          //   attack strategies mapped to Guard interception points
+     profiler.go          //   ComponentProfiler → agent_profile
+     types.go             //   RuntimeEvent + config structs (frozen wire)
+```
+New exported: `ModelMode` type + `Guard.ModelMode()`, `Guard.SimulationActive() bool`; options
+`WithHeartbeat`, `WithModeChangeHandler`, `WithManifestRefreshHandler`, `WithSimulation(bool)`. WS is
+the one new third-party dep (a small WebSocket client) — confined to `simulation/`, keeping core
+stdlib-only. **No new required call** for basic participation: `New` + `Connect` + the transport wrap
+is enough for a Go agent to become an observe-mode simulation target.
+
+### 13.6 Milestones (this effort)
+- **A** — config poller + `ModelMode()` + callbacks. Unit: hash-change fires once; manifest-refresh
+  re-connects; signed GET accepted by prism.
+- **B1** — sim controller + WS transport + protection_disabled + behavior_monitor + telemetry.
+  E2E: a sim started against a Go agent yields observe-mode telemetry + agent_profile in eval-runner.
+- **B2** — attack injector (config_inject + tool_poison + error_inject) + profiler + tier hot-swap.
+  E2E: threat_hunt run injects and the 4-state correlator sees injections + what flyedge caught.
+
+### 13.7 Local testing & verification
+**Local status (audited 2026-07-20):** the simulation layer is fully present in the local stack's
+*code* (prism, agent-eval + eval-worker, Redis all deploy under `just local`) but **not enabled** —
+it's gated on env vars that the local manifests don't set. **No code changes to prism/agent-eval are
+needed**; the gaps are purely env, in `terraform-compfly/local/`:
+
+1. **prism** (`local/enforcement/prism.yaml` env) — currently missing, all required:
+   - `SIMULATION_JWT_SECRET` — any non-empty dev value. Without it prism logs "Simulation disabled";
+     `/config` never surfaces `simulation` and the telemetry WS returns 500 "Simulation not configured".
+   - `INTERNAL_API_KEY` — dev value. Without it the entire `/internal/*` router (incl. the simulation
+     PUT/DELETE) is not mounted → 404. Auth header is `x-internal-key`.
+   - `SIMULATION_TELEMETRY_URL: ws://prism:8080/v1/simulation/telemetry` (in-cluster) or
+     `ws://localhost:8080/...` (host client) — else it advertises the prod `wss://` URL.
+2. **agent-eval** (`overlays/local/services/agent-eval.yaml`, `agent-eval-config` CM) — to *drive*
+   sims: `PRISM_URL: http://prism:8080` + `PRISM_INTERNAL_API_KEY: <same value as prism
+   INTERNAL_API_KEY>`. (Name mismatch is real: agent-eval reads `PRISM_INTERNAL_API_KEY`, prism reads
+   `INTERNAL_API_KEY` — the *values* must match.)
+
+**Prerequisite PR (Phase A companion):** a small `terraform-compfly/local` change adding the above
+env. Prism is already `:8080` port-forwarded and Redis is up, so once the env lands both test paths work:
+
+- **Full path** — trigger an eval in agent-eval; it PUTs prism's internal endpoint, the Go agent's
+  poller picks up `simulation` from `/config`, streams over the WS, eval-runner correlates outcomes.
+- **Hand-driven** (no agent-eval) — a host test `PUT http://localhost:8080/internal/v1/agents/{slug}/simulation`
+  with `x-internal-key`, then run the Go agent and watch it poll `/config` + connect the WS.
+  `agent-eval/examples/captain-whiskers/verify_simulation.py` is the working reference for the PUT+WS flow.
+
+**Per-phase verification:** A — unit (hash-change fires once, manifest-refresh re-connects, signed GET
+accepted) + hand-driven `/config` returns a seeded `simulation`. B1 — Go agent registered locally,
+sim started, observe-mode telemetry + `agent_profile` land in eval-runner (Redis `sim:telemetry:{runId}`).
+B2 — threat_hunt run: injections appear and the 4-state correlator distinguishes blocked vs compromised.
