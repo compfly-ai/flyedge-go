@@ -48,17 +48,24 @@ type Config struct {
 	ProxyMode bool
 	// Timeout bounds each enforcement HTTP call. Zero → 30s.
 	Timeout time.Duration
+	// SimTelemetryURL overrides the simulation telemetry WebSocket URL the server advertises in the
+	// config's `simulation` block (COMPFLY_SIM_TELEMETRY_URL). Server-authoritative by default (empty);
+	// set it only for split-horizon local dev, where the agent runs on the host but the gateway hands
+	// back an in-cluster URL (e.g. ws://prism:8080) the host can't resolve — point it at the host's
+	// port-forwarded gateway (e.g. ws://localhost:8080/v1/simulation/telemetry).
+	SimTelemetryURL string
 }
 
 // LoadEnv builds a Config from COMPFLY_*/FLYEDGE_* environment variables. This is the single,
 // explicit place env is read — callers may then override fields before calling New.
 func LoadEnv() Config {
 	cfg := Config{
-		APIURL:     os.Getenv("COMPFLY_API_URL"),
-		DID:        os.Getenv("COMPFLY_AGENT_DID"),
-		KeyPEMPath: os.Getenv("COMPFLY_AGENT_PRIVATE_KEY_PATH"),
-		Mode:       Mode(os.Getenv("FLYEDGE_MODE")),
-		FailMode:   FailMode(os.Getenv("FLYEDGE_FAIL_MODE")),
+		APIURL:          os.Getenv("COMPFLY_API_URL"),
+		DID:             os.Getenv("COMPFLY_AGENT_DID"),
+		KeyPEMPath:      os.Getenv("COMPFLY_AGENT_PRIVATE_KEY_PATH"),
+		Mode:            Mode(os.Getenv("FLYEDGE_MODE")),
+		FailMode:        FailMode(os.Getenv("FLYEDGE_FAIL_MODE")),
+		SimTelemetryURL: os.Getenv("COMPFLY_SIM_TELEMETRY_URL"),
 	}
 	if inline := os.Getenv("COMPFLY_AGENT_PRIVATE_KEY"); inline != "" {
 		cfg.KeyPEM = []byte(inline)

@@ -8,16 +8,23 @@ import (
 
 // toSimConfig converts the poller's SimulationConfig (the flyedge wire struct) into the simulation
 // package's Config. Returns nil for nil (no active run).
-func toSimConfig(sc *SimulationConfig) *simulation.Config {
+func (g *Guard) toSimConfig(sc *SimulationConfig) *simulation.Config {
 	if sc == nil {
 		return nil
+	}
+	// Split-horizon override: when the caller pinned a telemetry URL (host-run agent vs in-cluster
+	// gateway), the controller dials that instead of the server-advertised one. SimulationConfig()
+	// still returns the honest server view — only the controller's transport is redirected.
+	telemetryURL := sc.TelemetryURL
+	if g.cfg.SimTelemetryURL != "" {
+		telemetryURL = g.cfg.SimTelemetryURL
 	}
 	return &simulation.Config{
 		Active:             sc.Active,
 		RunID:              sc.RunID,
 		Middlewares:        sc.Middlewares,
 		TelemetryJWT:       sc.TelemetryJWT,
-		TelemetryURL:       sc.TelemetryURL,
+		TelemetryURL:       telemetryURL,
 		ProtectionDisabled: sc.ProtectionDisabled,
 		Extra:              sc.Extra,
 	}

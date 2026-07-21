@@ -49,7 +49,7 @@ func (g *Guard) Connect(ctx context.Context, info ManifestInfo) error {
 			fw = sdkVersion
 		}
 		g.simCtl = simulation.New(fw)
-		g.onSimChange = func(sc *SimulationConfig) { g.simCtl.OnConfigChange(toSimConfig(sc)) }
+		g.onSimChange = func(sc *SimulationConfig) { g.simCtl.OnConfigChange(g.toSimConfig(sc)) }
 	}
 	g.pollMu.Unlock()
 	if err := g.connectOnce(ctx); err != nil {
