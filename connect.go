@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // sdkVersion identifies this SDK in the manifest + telemetry.
@@ -31,20 +32,62 @@ type ManifestInfo struct {
 // Connect registers the agent's manifest with the gateway (POST /v1/flyedge/connect), enabling
 // presence tracking and manifest-seeded baselines. Explicit — call it once at startup. Requires a
 // signed enforcer (a real Guard); a stub/offline enforcer returns an error.
+//
+// On success it also starts the config heartbeat poller (an owned goroutine, stopped by Close):
+// the ConnectResponse carries the heartbeat cadence + initial model_mode, and the poller then keeps
+// model_mode current, honors manifest-refresh requests, and surfaces the simulation block.
 func (g *Guard) Connect(ctx context.Context, info ManifestInfo) error {
+	g.pollMu.Lock()
+	g.manifestInfo = info
+	g.pollMu.Unlock()
+	if err := g.connectOnce(ctx); err != nil {
+		return err
+	}
+	g.startConfigPoll()
+	return nil
+}
+
+// connectOnce POSTs the current manifest and folds the ConnectResponse (cadence + model_mode) into
+// the Guard. Used by both Connect and the manifest-refresh path (reconnect).
+func (g *Guard) connectOnce(ctx context.Context) error {
 	sp, ok := g.enforcer.(signedPoster)
 	if !ok {
 		return fmt.Errorf("flyedge: Connect requires the default HTTP enforcer")
 	}
+	g.pollMu.RLock()
+	info := g.manifestInfo
+	g.pollMu.RUnlock()
+
 	m := buildManifest(info)
 	body, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	if _, err := sp.PostSigned(ctx, "/v1/flyedge/connect", body); err != nil {
+	raw, err := sp.PostSigned(ctx, "/v1/flyedge/connect", body)
+	if err != nil {
 		return fmt.Errorf("flyedge: connect: %w", err)
 	}
+
+	var cr connectResponse
+	_ = json.Unmarshal(raw, &cr) // response parse is best-effort — a 200 already means accepted.
+	g.pollMu.Lock()
+	g.manifestHash = m.ManifestHash
+	if cr.ModelMode != nil {
+		g.modelMode = ModelMode(*cr.ModelMode)
+	}
+	if g.pollInterval <= 0 && cr.HeartbeatIntervalSeconds > 0 {
+		g.pollInterval = time.Duration(cr.HeartbeatIntervalSeconds) * time.Second
+	}
+	g.pollMu.Unlock()
 	return nil
+}
+
+// reconnect re-sends the manifest when prism requests a refresh (manifest_refresh_required). It does
+// not restart the poller — that runs for the Guard's lifetime.
+func (g *Guard) reconnect(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, g.cfg.Timeout)
+	defer cancel()
+	return g.connectOnce(ctx)
 }
 
 // --- manifest wire shape (matches prism AgentManifest) ---

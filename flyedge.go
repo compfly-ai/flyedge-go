@@ -9,6 +9,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/compfly-ai/flyedge-go/enforce"
@@ -87,6 +89,25 @@ type Guard struct {
 	tel            telemetry.Telemetry
 	cloudTelemetry bool          // WithCloudTelemetry: ship events to /v1/flyedge/telemetry
 	telInterval    time.Duration // flush interval for cloud telemetry
+
+	// Config heartbeat poller (Phase A): an owned goroutine started by Connect and stopped by
+	// Close. It GETs /v1/flyedge/config on an interval to keep model_mode current, honor
+	// manifest-refresh requests, and surface the simulation block. pollMu guards all fields below.
+	pollMu       sync.RWMutex
+	hostname     string
+	manifestInfo ManifestInfo
+	manifestHash string
+	modelMode    ModelMode
+	sim          *SimulationConfig
+	lastSimHash  string
+	pollInterval time.Duration // WithHeartbeat override; else set from ConnectResponse
+	pollStarted  bool
+	pollStop     chan struct{}
+	pollDone     chan struct{}
+
+	onModeChange      func(old, cur ModelMode)
+	onManifestRefresh func()
+	onSimChange       func(*SimulationConfig) // internal hook; Phase B's sim controller attaches here
 }
 
 // New builds a Guard from cfg (+ options). If a key is configured it builds a Signer; otherwise the
@@ -95,6 +116,7 @@ type Guard struct {
 func New(cfg Config, opts ...Option) (*Guard, error) {
 	cfg = cfg.withDefaults()
 	g := &Guard{cfg: cfg}
+	g.hostname, _ = os.Hostname()
 
 	if err := applyOptions(g, opts); err != nil {
 		return nil, err
@@ -199,8 +221,17 @@ func (g *Guard) DID() string {
 	return g.signer.DID()
 }
 
-// Close flushes and releases resources (e.g. a telemetry sink's owned goroutine). Safe to call once.
+// Close flushes and releases resources: it stops the config poller (if Connect started one) and the
+// telemetry sink's owned goroutine. Safe to call once.
 func (g *Guard) Close() error {
+	g.pollMu.Lock()
+	stop, done := g.pollStop, g.pollDone
+	g.pollStop = nil
+	g.pollMu.Unlock()
+	if stop != nil {
+		close(stop)
+		<-done
+	}
 	if g.tel != nil {
 		return g.tel.Close()
 	}
