@@ -452,6 +452,57 @@ explicit hooks). `ComponentProfiler` (`simulation/profiler.go`) builds the `agen
 static templates keyed by strategy × sophistication L1–L4 (`attack_payloads.py`), placeholders
 resolved from the profile. Tier transitions hot-swap via the poller's config-update path.
 
+#### 13.4a B2 — validated against the Python source (2026-07-21)
+
+Read `flyedge/simulation/{attack_injector,attack_schedule,attack_payloads,types}.py`. The 13.4
+mapping is confirmed; the build details below are what the Go port must match.
+
+**Scheduling — chains of steps (not per-call payloads).** Injection is a set of `AttackChain`s, each a
+sequential list of `AttackStep`s. A step declares `{strategy, target_component_type (llm|tool|
+retriever|checkpoint), target_component_name ("*"=any), sophistication L1–L4, payload_template?,
+variant_index}`. On each governed component call the controller finds the first chain whose current
+step `matches(component_type,name)`, injects, advances that chain's cursor, and stops (**one injection
+per call**). A global `max_injections` cap (default 100) auto-stops. Chains model multi-stage attacks
+(poison memory → wait for retrieval → exploit via LLM). Two sources: explicit `chains` from the
+eval-runner via config, or `build_default_chains(profile, sophistication_range)` — one chain per
+discovered surface (config_inject on LLM; tool_poison/error_inject per tool, error_inject only for
+critical/high-risk tools; rag_harvest per retriever; memory_poison per checkpoint).
+
+**Strategy → mutation (exact):** `config_inject` inserts a `{role:"system"}` message after the system
+prompt in the LLM request. `tool_poison` merges a dict into / appends a note to the tool result.
+`error_inject` replaces the tool result with a crafted error string. `rag_harvest` inserts a poisoned
+doc at the top of (or replaces) retrieval results. `memory_poison` appends the payload to the memory
+store args (`value`/`content`/`data`). First three are the Go priority (LLM + tool seams the Guard
+owns); rag/memory are opt-in via explicit hooks.
+
+**Config shape** — the `simulation.extra.attack_injector` block: `{mode: "observe"|"attack", tier,
+max_injections, agent_hints:{tools:[...]}, attack_config:{chains:[...] | sophistication_range:[min,max],
+evolved_payloads:[...]}}`. `update_config` hot-swaps: switching to a new attack tier reloads chains and
+resets the injection counter. Observe mode only profiles.
+
+**Payloads** — static templates keyed `strategy → {1..4: [variants]}` (`attack_payloads.py`), with
+`{purpose}`/`{tool_name}`/`{run_id}` placeholders filled from the profile (`purpose`/first topic from
+the system-prompt parse; first tool name; run id). L1 = direct injection, L2 = contextual mimicry,
+L3 = indirect reference, L4 = multi-step/benign-looking. Port the tables verbatim.
+
+**ComponentProfiler → `agent_profile`** — builds from: LLM-call tool defs (name/desc/params →
+risk+category via regex tables) + system-prompt parse (capabilities/guardrails/purpose/topics) +
+component observations (retriever/checkpoint counts + result shapes). Emits `agent_profile` on a
+RuntimeEvent when dirty (confidence low→medium→high by LLM-call count). In Go, seed it from the
+`Connect` manifest (tools/models) + the pre_llm content (system prompt) + `recordSimEvent` observations
+— observe mode needs **no new caller code** (piggybacks B1 telemetry).
+
+**Telemetry** — `AttackStep.inject` stamps `injection_{id,strategy,target,sophistication,chain,tier}`
+on the event; the profiler flush stamps `agent_profile`. Go `simulation/types.go` already carries these
+fields. Correlation to the 4-state outcome model (blocked/ineffective/compromised/untriggered) is
+eval-runner-side; the SDK only emits the injection + subsequent behavior-flag events.
+
+**Gothonic API decision (the one real question):** tool-result injection has to mutate a value the
+caller then uses. Keep it explicit — an injection-aware `CheckToolResponse` (returns the possibly
+mutated result) or a sibling `Guard.SimInjectToolResult(...)`, never hidden mutation. config_inject is
+free (the transport wrap already owns the LLM request); tool injection requires the caller route the
+result through the Guard (it already does, for `CheckToolResponse`). Finalize this signature at build.
+
 ### 13.5 Packages + exported surface
 ```
 flyedge-go/

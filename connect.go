@@ -51,6 +51,11 @@ func (g *Guard) Connect(ctx context.Context, info ManifestInfo) error {
 		g.simCtl = simulation.New(fw)
 		g.onSimChange = func(sc *SimulationConfig) { g.simCtl.OnConfigChange(g.toSimConfig(sc)) }
 	}
+	// Seed the simulation profiler with the declared surface so observe-mode agent_profile reflects
+	// the manifest tools/models (Phase B2).
+	if g.simCtl != nil {
+		g.simCtl.SetManifest(info.Tools, info.Models)
+	}
 	g.pollMu.Unlock()
 	if err := g.connectOnce(ctx); err != nil {
 		return err
