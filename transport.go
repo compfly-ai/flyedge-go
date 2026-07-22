@@ -34,6 +34,35 @@ func (g *Guard) WrapRoundTripper(base http.RoundTripper, opts ...WrapOption) htt
 	return rt
 }
 
+// configInjectRewrite inserts an adversarial system message into an LLM request body. It is
+// structural (not provider-hardcoded): an Anthropic-style body (top-level `system`) has the message
+// prepended to system; an OpenAI-style body (a `messages` array) gets a system message inserted at
+// the front. Unknown shapes are left unchanged. Used only by the attack injector (config_inject).
+func configInjectRewrite(body []byte, sysMsg string) []byte {
+	var m map[string]any
+	if json.Unmarshal(body, &m) != nil {
+		return body
+	}
+	if sys, hasSystem := m["system"]; hasSystem {
+		switch s := sys.(type) {
+		case string:
+			m["system"] = sysMsg + "\n\n" + s
+		case []any:
+			m["system"] = append([]any{map[string]any{"type": "text", "text": sysMsg}}, s...)
+		default:
+			m["system"] = sysMsg
+		}
+	} else if msgs, ok := m["messages"].([]any); ok {
+		m["messages"] = append([]any{map[string]any{"role": "system", "content": sysMsg}}, msgs...)
+	} else {
+		m["system"] = sysMsg
+	}
+	if b, err := json.Marshal(m); err == nil {
+		return b
+	}
+	return body
+}
+
 type guardRoundTripper struct {
 	guard         *Guard
 	base          http.RoundTripper
@@ -66,6 +95,18 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	req.Body = io.NopCloser(bytes.NewReader(body))
 	req.ContentLength = int64(len(body))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+
+	// config_inject (Phase B2): while a simulation is active in attack mode, rewrite the LLM request
+	// to insert an adversarial system message before it is checked + forwarded — the same seam the
+	// wrap already owns for pre_llm, flipped from observe to mutate.
+	if t.guard.simCtl != nil {
+		if sysMsg, ok := t.guard.simCtl.InjectLLMSystemMessage(req.URL.Host); ok {
+			body = configInjectRewrite(body, sysMsg)
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			req.ContentLength = int64(len(body))
+			req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+		}
+	}
 
 	// In-band proxy mode: route the ACTUAL call through prism /v1/proxy (prism enforces inline and
 	// forwards to the provider), instead of the out-of-band /check + direct forward.
