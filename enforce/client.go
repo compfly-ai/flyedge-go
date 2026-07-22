@@ -15,6 +15,15 @@ import (
 // checkPath is the enforcement endpoint on the prism gateway.
 const checkPath = "/v1/flyedge/check"
 
+// applyIdentityHeaders attaches any OBO/delegation/agent-identity headers carried on ctx to a
+// signed request. These are headers only — they are never folded into the signed body — so the
+// frozen /check request schema and its signature are untouched. No-op when ctx carries none.
+func applyIdentityHeaders(ctx context.Context, req *http.Request) {
+	for k, v := range IdentityHeaders(ctx) {
+		req.Header.Set(k, v)
+	}
+}
+
 // Enforcer is the policy decision point. Implementations are swappable (HTTP client, an offline
 // stub for tests, a record/replay fake). Check must be safe for concurrent use.
 type Enforcer interface {
@@ -55,6 +64,7 @@ func (e *HTTPEnforcer) Check(ctx context.Context, req CheckRequest) (Decision, e
 		return Decision{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	applyIdentityHeaders(ctx, httpReq)
 	if e.signer != nil {
 		hdrs, err := e.signer.Sign(body, e.now())
 		if err != nil {
@@ -130,6 +140,7 @@ func (e *HTTPEnforcer) GetSigned(ctx context.Context, path string, headers map[s
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	applyIdentityHeaders(ctx, req)
 	if e.signer != nil {
 		hdrs, err := e.signer.Sign(nil, e.now())
 		if err != nil {
@@ -160,6 +171,7 @@ func (e *HTTPEnforcer) PostSigned(ctx context.Context, path string, body []byte)
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	applyIdentityHeaders(ctx, req)
 	if e.signer != nil {
 		hdrs, err := e.signer.Sign(body, e.now())
 		if err != nil {

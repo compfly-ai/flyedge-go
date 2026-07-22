@@ -27,6 +27,13 @@ type ManifestInfo struct {
 	Tools       []string // tool names the agent can call
 	Models      []string // model ids the agent uses
 	Environment string   // dev|staging|prod
+
+	// Enterprise is an optional enterprise-identity block (provider, tenantId, roles, groups,
+	// scopes, issuer, …). prism stores it on the agent (pass-through) for enterprise governance.
+	Enterprise map[string]any
+	// EnterpriseToken is the optional raw enterprise identity JWT (a body credential prism carries
+	// through without interpreting). Set alongside Enterprise for enterprise-authenticated agents.
+	EnterpriseToken string
 }
 
 // Connect registers the agent's manifest with the gateway (POST /v1/flyedge/connect), enabling
@@ -93,11 +100,13 @@ func (g *Guard) reconnect(ctx context.Context) error {
 // --- manifest wire shape (matches prism AgentManifest) ---
 
 type agentManifest struct {
-	SDKVersion   string            `json:"sdk_version"`
-	ManifestHash string            `json:"manifest_hash"`
-	Framework    frameworkInfo     `json:"framework"`
-	Capabilities agentCapabilities `json:"capabilities"`
-	Environment  *environmentInfo  `json:"environment,omitempty"`
+	SDKVersion      string            `json:"sdk_version"`
+	ManifestHash    string            `json:"manifest_hash"`
+	Framework       frameworkInfo     `json:"framework"`
+	Capabilities    agentCapabilities `json:"capabilities"`
+	Environment     *environmentInfo  `json:"environment,omitempty"`
+	Enterprise      map[string]any    `json:"enterprise,omitempty"`
+	EnterpriseToken string            `json:"enterprise_token,omitempty"`
 }
 
 type frameworkInfo struct {
@@ -145,6 +154,10 @@ func buildManifest(info ManifestInfo) agentManifest {
 	if info.Environment != "" {
 		m.Environment = &environmentInfo{Name: info.Environment}
 	}
+	// Enterprise identity is pass-through metadata; it is deliberately excluded from manifestHash
+	// (below) so rotating an enterprise token does not trigger a manifest-drift refresh.
+	m.Enterprise = info.Enterprise
+	m.EnterpriseToken = info.EnterpriseToken
 	m.ManifestHash = manifestHash(m)
 	return m
 }
