@@ -60,6 +60,10 @@ type Operation struct {
 	Type         string `json:"type"`
 	ToolName     string `json:"tool_name,omitempty"`
 	ToolArgsHash string `json:"tool_args_hash,omitempty"`
+	// ToolArgsJSON carries the full tool arguments as JSON so argument-level policies can evaluate
+	// values (prism forwards it to the enforcer's tool_args map). Distinct from Content: Content is
+	// the inspected/hashed payload + preview; this is the structured args for policy.
+	ToolArgsJSON string `json:"tool_args_json,omitempty"`
 	ModelID      string `json:"model_id,omitempty"`
 	DestDomain   string `json:"dest_domain,omitempty"`
 }

@@ -20,7 +20,7 @@ func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, arg
 		ComponentName: toolName,
 		MethodName:    "call",
 		Content:       Content{Full: jsonString(args)},
-		Operation:     Operation{Type: "tool.call", ToolName: toolName, DestDomain: destDomain},
+		Operation:     Operation{Type: "tool.call", ToolName: toolName, DestDomain: destDomain, ToolArgsJSON: jsonString(args)},
 	})
 }
 
