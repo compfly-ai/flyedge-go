@@ -15,6 +15,7 @@ import (
 
 	"github.com/compfly-ai/flyedge-go/enforce"
 	"github.com/compfly-ai/flyedge-go/identity"
+	"github.com/compfly-ai/flyedge-go/simulation"
 	"github.com/compfly-ai/flyedge-go/telemetry"
 )
 
@@ -107,7 +108,13 @@ type Guard struct {
 
 	onModeChange      func(old, cur ModelMode)
 	onManifestRefresh func()
-	onSimChange       func(*SimulationConfig) // internal hook; Phase B's sim controller attaches here
+	onSimChange       func(*SimulationConfig) // internal hook; the sim controller attaches here
+
+	// Simulation (Phase B): the controller is built at Connect (unless WithSimulation(false)).
+	// While a run is active it streams RuntimeEvents over the telemetry WebSocket and drives
+	// protection_disabled; onSimChange forwards config-poll changes to it.
+	simEnabled bool
+	simCtl     *simulation.Controller
 }
 
 // New builds a Guard from cfg (+ options). If a key is configured it builds a Signer; otherwise the
@@ -117,6 +124,7 @@ func New(cfg Config, opts ...Option) (*Guard, error) {
 	cfg = cfg.withDefaults()
 	g := &Guard{cfg: cfg}
 	g.hostname, _ = os.Hostname()
+	g.simEnabled = true // WithSimulation(false) opts out
 
 	if err := applyOptions(g, opts); err != nil {
 		return nil, err
@@ -165,6 +173,21 @@ func randID() string {
 // enforcement-call failure it honors FailMode: FailOpen → allow + nil error; FailClosed → deny +
 // *DenyError. A Warn decision returns (Decision{Action:Warn}, nil) — the caller decides.
 func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
+	// Simulation: when a run is active, observe the operation (stream a RuntimeEvent) and — if the
+	// run requested protection be disabled (baseline eval) — bypass the policy check with an allow,
+	// so the agent's raw behavior is measured. Deny/kill still enforce when protection is NOT disabled.
+	if g.simCtl != nil && g.simCtl.Active() {
+		g.recordSimEvent(req)
+		if g.simCtl.ProtectionDisabled() {
+			dec := Decision{Action: ActionAllow, Reason: "simulation_protection_disabled"}
+			g.tel.Record(telemetry.Event{
+				Stage: string(req.Stage), Model: req.Operation.ModelID,
+				Action: string(ActionAllow), Reason: dec.Reason, OccurredAt: time.Now(),
+			})
+			return dec, nil
+		}
+	}
+
 	start := time.Now()
 	dec, cerr := g.enforcer.Check(ctx, req)
 	latencyMS := float64(time.Since(start).Microseconds()) / 1000.0
@@ -231,6 +254,9 @@ func (g *Guard) Close() error {
 	if stop != nil {
 		close(stop)
 		<-done
+	}
+	if g.simCtl != nil {
+		g.simCtl.Stop()
 	}
 	if g.tel != nil {
 		return g.tel.Close()
