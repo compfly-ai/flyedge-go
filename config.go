@@ -5,8 +5,17 @@ import (
 	"time"
 )
 
-// Mode governs local detectors (loop/injection/etc). A server-side deny always enforces
-// regardless of Mode. Mirrors FLYEDGE_MODE in the Python SDK.
+// Mode is the local enforcement posture. A server-side deny or kill ALWAYS enforces regardless of
+// Mode — Mode only decides (a) whether the policy check is called at all and (b) how an advisory
+// server `warn` is treated locally:
+//   - ModeOff:     skip the policy check entirely (local dev) — Check returns allow, no network call.
+//   - ModeAudit:   check + record; never block on an advisory warn (server deny/kill still enforce).
+//   - ModeWarn:    (default) block on server deny/kill only; a warn is advisory (returned, not blocked).
+//   - ModeEnforce: also treat a server warn as blocking.
+//
+// Mirrors FLYEDGE_MODE in the Python SDK, whose policy middleware likewise enforces server denials
+// independently of mode. (There are no local detectors in flyedge-go yet; when they land they follow
+// the same posture — advisory in warn/audit, blocking in enforce.)
 type Mode string
 
 const (

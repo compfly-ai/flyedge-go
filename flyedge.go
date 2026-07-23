@@ -168,11 +168,19 @@ func randID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Check runs a request through the policy decision point and returns the typed Decision. On a
-// denial it ALSO returns a *DenyError (server deny/block always enforces regardless of Mode). On an
-// enforcement-call failure it honors FailMode: FailOpen → allow + nil error; FailClosed → deny +
-// *DenyError. A Warn decision returns (Decision{Action:Warn}, nil) — the caller decides.
+// Check runs a request through the policy decision point and returns the typed Decision. Behavior by
+// Mode: ModeOff short-circuits to allow WITHOUT calling the server; otherwise the server is called and
+// a deny/kill ALWAYS enforces (returns *DenyError / *KillSwitchError) regardless of Mode. An advisory
+// server `warn` blocks only in ModeEnforce (returned as deny + *DenyError); in Warn/Audit it returns
+// (Decision{Action:Warn}, nil) for the caller to record, not block. On an enforcement-call failure it
+// honors FailMode: FailOpen → allow + nil error; FailClosed → deny + *DenyError.
 func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
+	// ModeOff is a purely local posture: skip the policy check entirely (local dev), no network call.
+	// Server deny/kill can't apply because we never ask — this is the one Mode that doesn't enforce.
+	if g.cfg.Mode == ModeOff {
+		return Decision{Action: ActionAllow, Reason: "mode_off"}, nil
+	}
+
 	// Simulation: when a run is active, observe the operation (stream a RuntimeEvent) and — if the
 	// run requested protection be disabled (baseline eval) — bypass the policy check with an allow,
 	// so the agent's raw behavior is measured. Deny/kill still enforce when protection is NOT disabled.
@@ -222,6 +230,15 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	case dec.Action == ActionDeny:
 		result = dec
 		retErr = &DenyError{Decision: dec}
+	case dec.Action == ActionWarn && g.cfg.Mode == ModeEnforce:
+		// Mode posture: ModeEnforce treats an advisory server `warn` as blocking. In Warn/Audit the
+		// warn stays advisory (falls through to the default and is returned without an error).
+		result = dec
+		result.Action = ActionDeny
+		if result.Reason == "" {
+			result.Reason = "warn_enforced"
+		}
+		retErr = &DenyError{Decision: result}
 	default:
 		result = dec
 	}
