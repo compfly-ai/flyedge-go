@@ -181,6 +181,17 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 		return Decision{Action: ActionAllow, Reason: "mode_off"}, nil
 	}
 
+	// Default correlation ids once, so every gate — including the manual
+	// CheckToolCall/CheckToolResponse/CheckModelResponse helpers, not just the
+	// transport wrap — carries a request_id into /check and telemetry. SessionID
+	// stays the caller's to supply.
+	if req.RequestID == "" {
+		req.RequestID = "req-" + randHex()
+	}
+	if req.TimestampMS == 0 {
+		req.TimestampMS = time.Now().UnixMilli()
+	}
+
 	// Simulation: when a run is active, observe the operation (stream a RuntimeEvent) and — if the
 	// run requested protection be disabled (baseline eval) — bypass the policy check with an allow,
 	// so the agent's raw behavior is measured. Deny/kill still enforce when protection is NOT disabled.
