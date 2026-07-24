@@ -30,6 +30,14 @@ const (
 	ActionWarn  Action = "warn"
 )
 
+// OriginType values for CheckRequest.OriginType (prism FlyedgeOriginType, snake_case).
+// Use one of these — prism rejects any other value (it deserializes into a fixed enum).
+const (
+	OriginTypeUser       = "user"       // direct user request (human in the loop)
+	OriginTypeAgent      = "agent"      // agent-mediated request (default)
+	OriginTypeAutonomous = "autonomous" // fully autonomous, no user context
+)
+
 // CheckRequest is the body POSTed to /v1/flyedge/check. The signature is computed over the exact
 // serialized bytes of this struct, so serialize once and sign those bytes.
 type CheckRequest struct {
