@@ -30,19 +30,61 @@ const (
 	ActionWarn  Action = "warn"
 )
 
+// OriginType values for CheckRequest.OriginType (prism FlyedgeOriginType, snake_case).
+// Use one of these — prism rejects any other value (it deserializes into a fixed enum).
+const (
+	OriginTypeUser       = "user"       // direct user request (human in the loop)
+	OriginTypeAgent      = "agent"      // agent-mediated request (default)
+	OriginTypeAutonomous = "autonomous" // fully autonomous, no user context
+)
+
 // CheckRequest is the body POSTed to /v1/flyedge/check. The signature is computed over the exact
 // serialized bytes of this struct, so serialize once and sign those bytes.
 type CheckRequest struct {
-	RequestID     string         `json:"request_id"`
-	SessionID     string         `json:"session_id"`
-	TimestampMS   int64          `json:"timestamp_ms"`
-	Stage         Stage          `json:"stage"`
-	ComponentType string         `json:"component_type"` // e.g. LLM, TOOL
-	ComponentName string         `json:"component_name"` // e.g. ChatAnthropic
-	MethodName    string         `json:"method_name"`    // e.g. invoke
-	Content       Content        `json:"content"`
-	Operation     Operation      `json:"operation"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	RequestID     string    `json:"request_id"`
+	SessionID     string    `json:"session_id"`
+	TimestampMS   int64     `json:"timestamp_ms"`
+	Stage         Stage     `json:"stage"`
+	ComponentType string    `json:"component_type"` // e.g. LLM, TOOL
+	ComponentName string    `json:"component_name"` // e.g. ChatAnthropic
+	MethodName    string    `json:"method_name"`    // e.g. invoke
+	Content       Content   `json:"content"`
+	Operation     Operation `json:"operation"`
+	// Enrichment context prism accepts and feeds to policy. All optional — unset
+	// fields fall back to prism's serde defaults. Framework identifies the SDK.
+	Framework        string            `json:"framework,omitempty"`
+	Layer            string            `json:"layer,omitempty"`
+	Provider         string            `json:"provider,omitempty"`
+	OriginType       string            `json:"origin_type,omitempty"`
+	ExecutionContext *ExecutionContext `json:"execution_context,omitempty"`
+	AuthContext      *AuthContext      `json:"auth_context,omitempty"`
+	Metadata         map[string]any    `json:"metadata,omitempty"`
+}
+
+// ExecutionContext describes how/where the operation runs (prism FlyedgeExecutionContext) —
+// feeds environment/autonomy/trigger-aware policy. Optional.
+type ExecutionContext struct {
+	Environment  string `json:"environment,omitempty"`
+	IsAutonomous bool   `json:"is_autonomous,omitempty"`
+	TriggerType  string `json:"trigger_type,omitempty"`
+	Scheduled    bool   `json:"scheduled,omitempty"`
+	EventDriven  bool   `json:"event_driven,omitempty"`
+}
+
+// AuthContext carries application auth attributes for attribute-based governance
+// (prism FlyedgeAuthContext). Optional; pointers distinguish unset from zero.
+type AuthContext struct {
+	Method            string   `json:"method,omitempty"`
+	UserGroups        []string `json:"user_groups,omitempty"`
+	Department        string   `json:"department,omitempty"`
+	ClearanceLevel    string   `json:"clearance_level,omitempty"`
+	LastAuthMinutes   *int64   `json:"last_auth_minutes,omitempty"`
+	FailedAttempts    *int     `json:"failed_attempts,omitempty"`
+	DeviceID          string   `json:"device_id,omitempty"`
+	DeviceTrustScore  *float32 `json:"device_trust_score,omitempty"`
+	SessionAgeMinutes *int64   `json:"session_age_minutes,omitempty"`
+	RequiresAudit     bool     `json:"requires_audit,omitempty"`
+	DataResidency     string   `json:"data_residency,omitempty"`
 }
 
 // Content is the payload under inspection. Full carries the text; Hash + SizeBytes are required by
@@ -66,6 +108,7 @@ type Operation struct {
 	ToolArgsJSON string `json:"tool_args_json,omitempty"`
 	ModelID      string `json:"model_id,omitempty"`
 	DestDomain   string `json:"dest_domain,omitempty"`
+	MCPServerID  string `json:"mcp_server_id,omitempty"`
 }
 
 // fillDefaults populates the gateway-required derived fields the caller can omit: content hash

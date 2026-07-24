@@ -27,6 +27,9 @@ type (
 	CheckRequest = enforce.CheckRequest
 	Content      = enforce.Content
 	Operation    = enforce.Operation
+	// Enrichment context types (opt-in fields on CheckRequest).
+	ExecutionContext = enforce.ExecutionContext
+	AuthContext      = enforce.AuthContext
 )
 
 const (
@@ -38,6 +41,11 @@ const (
 	ActionAllow = enforce.ActionAllow
 	ActionDeny  = enforce.ActionDeny
 	ActionWarn  = enforce.ActionWarn
+
+	// OriginType* are the valid CheckRequest.OriginType values (prism enum, snake_case).
+	OriginTypeUser       = enforce.OriginTypeUser
+	OriginTypeAgent      = enforce.OriginTypeAgent
+	OriginTypeAutonomous = enforce.OriginTypeAutonomous
 )
 
 // Summary is the aggregate protection report (see Guard.Report).
@@ -181,6 +189,31 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 		return Decision{Action: ActionAllow, Reason: "mode_off"}, nil
 	}
 
+	// Default correlation ids once, so every gate — including the manual
+	// CheckToolCall/CheckToolResponse/CheckModelResponse helpers, not just the
+	// transport wrap — carries a request_id into /check and telemetry. SessionID
+	// stays the caller's to supply.
+	if req.RequestID == "" {
+		req.RequestID = "req-" + randHex()
+	}
+	if req.TimestampMS == 0 {
+		req.TimestampMS = time.Now().UnixMilli()
+	}
+	if req.Framework == "" {
+		req.Framework = "flyedge-go" // identify the SDK so prism doesn't fall back to its default
+	}
+
+	// Trace propagation: give this check its own span under the caller's trace
+	// (ContextWithTrace) or a session-derived trace, so prism nests it in the
+	// lifecycle span tree (it reads the traceparent header) and the emitted
+	// telemetry carries the same ids.
+	traceID, parentSpan, hasTrace := traceFromContext(ctx)
+	if !hasTrace || traceID == "" {
+		traceID = deriveTraceID(req.SessionID)
+	}
+	spanID := newSpanID()
+	ctx = enforce.ContextWithTraceparent(ctx, formatTraceparent(traceID, spanID))
+
 	// Simulation: when a run is active, observe the operation (stream a RuntimeEvent) and — if the
 	// run requested protection be disabled (baseline eval) — bypass the policy check with an allow,
 	// so the agent's raw behavior is measured. Deny/kill still enforce when protection is NOT disabled.
@@ -191,6 +224,8 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 			g.tel.Record(telemetry.Event{
 				Stage: string(req.Stage), Model: req.Operation.ModelID,
 				Action: string(ActionAllow), Reason: dec.Reason, OccurredAt: time.Now(),
+				SessionID: req.SessionID, RequestID: req.RequestID,
+				TraceID: traceID, SpanID: spanID, ParentSpanID: parentSpan,
 			})
 			return dec, nil
 		}
@@ -202,7 +237,7 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 
 	var result Decision
 	var retErr error
-	ev := telemetry.Event{Stage: string(req.Stage), Model: req.Operation.ModelID, LatencyMS: latencyMS, OccurredAt: start}
+	ev := telemetry.Event{Stage: string(req.Stage), Model: req.Operation.ModelID, LatencyMS: latencyMS, OccurredAt: start, SessionID: req.SessionID, RequestID: req.RequestID, TraceID: traceID, SpanID: spanID, ParentSpanID: parentSpan}
 
 	var killed *enforce.KilledError
 	switch {

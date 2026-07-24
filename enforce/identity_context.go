@@ -60,9 +60,10 @@ func (p Principal) encode() string {
 }
 
 type (
-	principalKey  struct{}
-	delegationKey struct{}
-	agentIDKey    struct{}
+	principalKey   struct{}
+	delegationKey  struct{}
+	agentIDKey     struct{}
+	traceparentKey struct{}
 )
 
 // agentIdentity holds the NHI subject id + structured urn set via ContextWithAgentIdentity.
@@ -120,5 +121,18 @@ func IdentityHeaders(ctx context.Context) map[string]string {
 			h[HeaderAgentURN] = id.urn
 		}
 	}
+	if tp, ok := ctx.Value(traceparentKey{}).(string); ok && tp != "" {
+		h["traceparent"] = tp
+	}
 	return h
+}
+
+// ContextWithTraceparent attaches a W3C `traceparent` so the signed POSTs carry it.
+// prism reads it (field[1]=trace id, field[2]=parent span) to place the check in its
+// lifecycle span tree. Empty is ignored.
+func ContextWithTraceparent(ctx context.Context, traceparent string) context.Context {
+	if traceparent == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, traceparentKey{}, traceparent)
 }
