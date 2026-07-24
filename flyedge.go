@@ -192,6 +192,17 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 		req.TimestampMS = time.Now().UnixMilli()
 	}
 
+	// Trace propagation: give this check its own span under the caller's trace
+	// (ContextWithTrace) or a session-derived trace, so prism nests it in the
+	// lifecycle span tree (it reads the traceparent header) and the emitted
+	// telemetry carries the same ids.
+	traceID, parentSpan, hasTrace := traceFromContext(ctx)
+	if !hasTrace || traceID == "" {
+		traceID = deriveTraceID(req.SessionID)
+	}
+	spanID := newSpanID()
+	ctx = enforce.ContextWithTraceparent(ctx, formatTraceparent(traceID, spanID))
+
 	// Simulation: when a run is active, observe the operation (stream a RuntimeEvent) and — if the
 	// run requested protection be disabled (baseline eval) — bypass the policy check with an allow,
 	// so the agent's raw behavior is measured. Deny/kill still enforce when protection is NOT disabled.
@@ -203,6 +214,7 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 				Stage: string(req.Stage), Model: req.Operation.ModelID,
 				Action: string(ActionAllow), Reason: dec.Reason, OccurredAt: time.Now(),
 				SessionID: req.SessionID, RequestID: req.RequestID,
+				TraceID: traceID, SpanID: spanID, ParentSpanID: parentSpan,
 			})
 			return dec, nil
 		}
@@ -214,7 +226,7 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 
 	var result Decision
 	var retErr error
-	ev := telemetry.Event{Stage: string(req.Stage), Model: req.Operation.ModelID, LatencyMS: latencyMS, OccurredAt: start, SessionID: req.SessionID, RequestID: req.RequestID}
+	ev := telemetry.Event{Stage: string(req.Stage), Model: req.Operation.ModelID, LatencyMS: latencyMS, OccurredAt: start, SessionID: req.SessionID, RequestID: req.RequestID, TraceID: traceID, SpanID: spanID, ParentSpanID: parentSpan}
 
 	var killed *enforce.KilledError
 	switch {
