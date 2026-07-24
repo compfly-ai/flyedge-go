@@ -21,6 +21,11 @@ type Event struct {
 	LatencyMS  float64
 	Err        string
 	OccurredAt time.Time
+	// SessionID / RequestID correlate this check with the agent's other
+	// telemetry and prism's /check record for the same session. Sourced from
+	// CheckRequest; without them cloud telemetry can't be joined to anything.
+	SessionID string
+	RequestID string
 }
 
 // Summary is an aggregate view over recorded events — the value Guard.Report() returns.

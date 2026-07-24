@@ -19,7 +19,7 @@ func TestBatchedFlushesOnClose(t *testing.T) {
 	}
 
 	b := NewBatched(sender, "sess-1", time.Hour) // long interval → only Close flushes
-	b.Record(Event{Stage: "pre_llm", Action: "allow", Model: "gpt-4o", LatencyMS: 12})
+	b.Record(Event{Stage: "pre_llm", Action: "allow", Model: "gpt-4o", LatencyMS: 12, SessionID: "sess-abc", RequestID: "req-1"})
 	b.Record(Event{Stage: "tool_call", Action: "deny", Reason: "x"})
 
 	// Report reflects both locally
@@ -43,7 +43,12 @@ func TestBatchedFlushesOnClose(t *testing.T) {
 	if batch.SessionID != "sess-1" || batch.EventCount != 2 || len(batch.Events) != 2 {
 		t.Fatalf("batch = %+v", batch)
 	}
-	if batch.Events[0].Type != "flyedge_check" || batch.Events[0].Source != "sdk" || batch.Events[0].Model != "gpt-4o" {
+	if batch.Events[0].Type != "protection_event" || batch.Events[0].Source != "sdk" || batch.Events[0].Model != "gpt-4o" {
 		t.Errorf("event[0] = %+v", batch.Events[0])
+	}
+	// The real per-event session/request id must survive into the emitted event
+	// so prism can correlate this check with the rest of the session's telemetry.
+	if batch.Events[0].SessionID != "sess-abc" || batch.Events[0].RequestID != "req-1" {
+		t.Errorf("event[0] correlation ids not carried: session=%q request=%q", batch.Events[0].SessionID, batch.Events[0].RequestID)
 	}
 }

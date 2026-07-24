@@ -191,6 +191,7 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 			g.tel.Record(telemetry.Event{
 				Stage: string(req.Stage), Model: req.Operation.ModelID,
 				Action: string(ActionAllow), Reason: dec.Reason, OccurredAt: time.Now(),
+				SessionID: req.SessionID, RequestID: req.RequestID,
 			})
 			return dec, nil
 		}
@@ -202,7 +203,7 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 
 	var result Decision
 	var retErr error
-	ev := telemetry.Event{Stage: string(req.Stage), Model: req.Operation.ModelID, LatencyMS: latencyMS, OccurredAt: start}
+	ev := telemetry.Event{Stage: string(req.Stage), Model: req.Operation.ModelID, LatencyMS: latencyMS, OccurredAt: start, SessionID: req.SessionID, RequestID: req.RequestID}
 
 	var killed *enforce.KilledError
 	switch {

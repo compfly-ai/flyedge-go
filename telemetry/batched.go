@@ -131,12 +131,17 @@ func toOtelEvents(evs []Event) []otelEvent {
 	out := make([]otelEvent, 0, len(evs))
 	for _, e := range evs {
 		out = append(out, otelEvent{
-			Type:      "flyedge_check",
+			// "protection_event" is the type prism's telemetry handler recognizes
+			// (maps to activity_type=protection_event). "flyedge_check" fell through
+			// the handler's `other => other` arm as an unmapped activity_type.
+			Type:      "protection_event",
 			Source:    "sdk",
+			RequestID: e.RequestID,
 			Model:     e.Model,
 			LatencyMS: uint64(e.LatencyMS),
+			SessionID: e.SessionID,
 			Timestamp: e.OccurredAt.UTC().Format(time.RFC3339),
-			Data:      map[string]any{"stage": e.Stage, "action": e.Action, "reason": e.Reason},
+			Data:      map[string]any{"stage": e.Stage, "action": e.Action, "reason": e.Reason, "error": e.Err},
 		})
 	}
 	return out
