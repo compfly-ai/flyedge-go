@@ -11,22 +11,54 @@ import (
 	"time"
 )
 
-// Event is one policy-check outcome. Action is the normalized decision ("allow"/"deny"/"warn"),
-// Err is set when the enforcement call itself failed.
+// Event types prism's telemetry handler recognizes (event_type → activity_type).
+// An empty Type is treated as EventProtection (a policy check).
+const (
+	EventProtection     = "protection_event" // a policy-check outcome (allow/deny/warn)
+	EventLLMIO          = "llm_io"            // a model call: model/provider/tokens/latency (+audit)
+	EventToolIO         = "tool_io"           // a tool call: name/args/result
+	EventSessionStart   = "session_start"     // agent session opened
+	EventSessionSummary = "session_summary"   // agent session ended (rolled-up stats in Data)
+)
+
+// Event is one telemetry record. For a policy check (the default — Type=="" or
+// EventProtection) Action is the normalized decision and Err is set when the
+// enforcement call itself failed. Rich types (llm_io/tool_io/session_*) carry the
+// model/tool/session fields below and are NOT counted as checks in Summary.
 type Event struct {
+	Type       string // event_type; "" ⇒ protection_event
 	Stage      string
 	Action     string
 	Reason     string
 	Model      string
+	Provider   string
+	Operation  string
+	Name       string // span / tool name
 	LatencyMS  float64
-	Err        string
-	OccurredAt time.Time
-	// SessionID / RequestID correlate this check with the agent's other
-	// telemetry and prism's /check record for the same session. Sourced from
-	// CheckRequest; without them cloud telemetry can't be joined to anything.
+	InputTokens  int64
+	OutputTokens int64
+	TotalTokens  int64
+	Streaming    *bool // set on streamed model calls
+	Err          string
+	OccurredAt   time.Time
+	// SessionID / RequestID correlate this record with the agent's other telemetry
+	// and prism's /check record for the same session. Sourced from CheckRequest.
 	SessionID string
 	RequestID string
+	// TraceID / SpanID / ParentSpanID place this record in prism's lifecycle span
+	// tree (W3C ids). Empty ⇒ prism treats it as unparented.
+	TraceID      string
+	SpanID       string
+	ParentSpanID string
+	// AgentFramework + audit payloads + arbitrary Data (session/protection events).
+	AgentFramework string
+	RequestFull    string
+	ResponseFull   string
+	Data           map[string]any
 }
+
+// isCheck reports whether this event is a policy check (feeds the check Summary).
+func (e Event) isCheck() bool { return e.Type == "" || e.Type == EventProtection }
 
 // Summary is an aggregate view over recorded events — the value Guard.Report() returns.
 type Summary struct {
@@ -72,6 +104,11 @@ func NewRecorder() *Recorder {
 }
 
 func (r *Recorder) Record(ev Event) {
+	// Only policy checks feed the check Summary; rich event types (llm_io/tool_io/
+	// session_*) are shipped by cloud sinks but must not inflate the check counters.
+	if !ev.isCheck() {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sum.Checks++
