@@ -191,6 +191,9 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	if req.TimestampMS == 0 {
 		req.TimestampMS = time.Now().UnixMilli()
 	}
+	if req.Framework == "" {
+		req.Framework = "flyedge-go" // identify the SDK so prism doesn't fall back to its default
+	}
 
 	// Trace propagation: give this check its own span under the caller's trace
 	// (ContextWithTrace) or a session-derived trace, so prism nests it in the
