@@ -27,6 +27,9 @@ type (
 	CheckRequest = enforce.CheckRequest
 	Content      = enforce.Content
 	Operation    = enforce.Operation
+	// Enrichment context types (opt-in fields on CheckRequest).
+	ExecutionContext = enforce.ExecutionContext
+	AuthContext      = enforce.AuthContext
 )
 
 const (
@@ -38,6 +41,11 @@ const (
 	ActionAllow = enforce.ActionAllow
 	ActionDeny  = enforce.ActionDeny
 	ActionWarn  = enforce.ActionWarn
+
+	// OriginType* are the valid CheckRequest.OriginType values (prism enum, snake_case).
+	OriginTypeUser       = enforce.OriginTypeUser
+	OriginTypeAgent      = enforce.OriginTypeAgent
+	OriginTypeAutonomous = enforce.OriginTypeAutonomous
 )
 
 // Summary is the aggregate protection report (see Guard.Report).
