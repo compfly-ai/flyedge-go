@@ -26,15 +26,47 @@ func (g *Guard) RecordLLMCallStreamed(sessionID, requestID, model, provider stri
 	g.emitLLM(sessionID, requestID, model, provider, inputTokens, outputTokens, latencyMS, &streamed)
 }
 
-func (g *Guard) emitLLM(sessionID, requestID, model, provider string, inputTokens, outputTokens int64, latencyMS float64, streamed *bool) {
+// LLMCall carries the facts of one model call. Token counts are the provider's own, reported as
+// the provider reports them: InputTokens is the UNCACHED count, with cache reads/writes separate.
+// The wire sums them into input_tokens and ships the breakdown alongside — callers never have to
+// decide how to combine the tiers.
+type LLMCall struct {
+	SessionID string
+	RequestID string
+	Model     string
+	Provider  string
+
+	InputTokens      int64 // uncached input, as the provider reports it
+	OutputTokens     int64
+	CacheReadTokens  int64 // prompt-cache hits; frequently orders of magnitude above InputTokens
+	CacheWriteTokens int64 // prompt-cache creation
+
+	LatencyMS float64
+	Streamed  *bool
+}
+
+// RecordLLMCallDetail emits an llm_io event from a full LLMCall, including cache tiers. Prefer it
+// over RecordLLMCall for any provider that reports prompt caching: without the cache counts the
+// platform's view of input volume is wrong by orders of magnitude, not by a rounding error.
+func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 	if g == nil || g.tel == nil {
 		return
 	}
 	g.tel.Record(telemetry.Event{
-		Type: telemetry.EventLLMIO, SessionID: sessionID, RequestID: requestID,
-		Model: model, Provider: provider, Operation: "chat",
-		InputTokens: inputTokens, OutputTokens: outputTokens, TotalTokens: inputTokens + outputTokens,
-		LatencyMS: latencyMS, Streaming: streamed, OccurredAt: time.Now(),
+		Type: telemetry.EventLLMIO, SessionID: c.SessionID, RequestID: c.RequestID,
+		Model: c.Model, Provider: c.Provider, Operation: "chat",
+		InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
+		TotalTokens:      c.InputTokens + c.OutputTokens,
+		CacheReadTokens:  c.CacheReadTokens,
+		CacheWriteTokens: c.CacheWriteTokens,
+		LatencyMS:        c.LatencyMS, Streaming: c.Streamed, OccurredAt: time.Now(),
+	})
+}
+
+func (g *Guard) emitLLM(sessionID, requestID, model, provider string, inputTokens, outputTokens int64, latencyMS float64, streamed *bool) {
+	g.RecordLLMCallDetail(LLMCall{
+		SessionID: sessionID, RequestID: requestID, Model: model, Provider: provider,
+		InputTokens: inputTokens, OutputTokens: outputTokens, LatencyMS: latencyMS, Streamed: streamed,
 	})
 }
 
