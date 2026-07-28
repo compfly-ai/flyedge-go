@@ -64,7 +64,7 @@ func TestRichEventsShipButDontCountAsChecks(t *testing.T) {
 	}
 
 	b := NewBatched(sender, "sess-x", time.Hour)
-	b.Record(Event{Stage: "pre_llm", Action: "allow"})                                                     // a check
+	b.Record(Event{Stage: "pre_llm", Action: "allow"})                                                       // a check
 	b.Record(Event{Type: EventLLMIO, Model: "gpt-4o", Provider: "openai", InputTokens: 10, OutputTokens: 5}) // rich
 	b.Record(Event{Type: EventToolIO, Name: "search", RequestFull: "{}"})                                    // rich
 
@@ -98,5 +98,37 @@ func TestRichEventsShipButDontCountAsChecks(t *testing.T) {
 	}
 	if tool := byType["tool_io"]; tool.Name != "search" || tool.RequestFull != "{}" {
 		t.Errorf("tool_io fields not carried: %+v", tool)
+	}
+}
+
+// TestWireInputTokensIncludeCache pins the wire semantic: input_tokens is the FULL input across
+// cache tiers, with the breakdown alongside. Reporting only the uncached count understates a
+// coding-agent turn by orders of magnitude (2 uncached vs ~380k cache reads is typical), and a
+// consumer that sums the breakdown fields must not double-count the total.
+func TestWireInputTokensIncludeCache(t *testing.T) {
+	got := toOtelEvents([]Event{{
+		Type: EventLLMIO, InputTokens: 2, OutputTokens: 986,
+		CacheReadTokens: 381623, CacheWriteTokens: 2104,
+		TotalTokens: 2 + 986,
+	}})
+	if len(got) != 1 {
+		t.Fatalf("expected 1 wire event, got %d", len(got))
+	}
+	e := got[0]
+	if want := uint64(2 + 381623 + 2104); e.InputTokens != want {
+		t.Errorf("input_tokens = %d, want %d (uncached + cache read + cache write)", e.InputTokens, want)
+	}
+	if e.UncachedInTokens != 2 {
+		t.Errorf("uncached_input_tokens = %d, want 2", e.UncachedInTokens)
+	}
+	if e.CacheReadTokens != 381623 || e.CacheWriteTokens != 2104 {
+		t.Errorf("cache breakdown lost: read=%d write=%d", e.CacheReadTokens, e.CacheWriteTokens)
+	}
+	// The breakdown must reconstruct the total exactly — no double-count, no gap.
+	if e.UncachedInTokens+e.CacheReadTokens+e.CacheWriteTokens != e.InputTokens {
+		t.Errorf("breakdown does not sum to input_tokens")
+	}
+	if want := uint64(2 + 986 + 381623 + 2104); e.TotalTokens != want {
+		t.Errorf("total_tokens = %d, want %d", e.TotalTokens, want)
 	}
 }

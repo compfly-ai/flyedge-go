@@ -15,10 +15,10 @@ import (
 // An empty Type is treated as EventProtection (a policy check).
 const (
 	EventProtection     = "protection_event" // a policy-check outcome (allow/deny/warn)
-	EventLLMIO          = "llm_io"            // a model call: model/provider/tokens/latency (+audit)
-	EventToolIO         = "tool_io"           // a tool call: name/args/result
-	EventSessionStart   = "session_start"     // agent session opened
-	EventSessionSummary = "session_summary"   // agent session ended (rolled-up stats in Data)
+	EventLLMIO          = "llm_io"           // a model call: model/provider/tokens/latency (+audit)
+	EventToolIO         = "tool_io"          // a tool call: name/args/result
+	EventSessionStart   = "session_start"    // agent session opened
+	EventSessionSummary = "session_summary"  // agent session ended (rolled-up stats in Data)
 )
 
 // Event is one telemetry record. For a policy check (the default — Type=="" or
@@ -26,21 +26,31 @@ const (
 // enforcement call itself failed. Rich types (llm_io/tool_io/session_*) carry the
 // model/tool/session fields below and are NOT counted as checks in Summary.
 type Event struct {
-	Type       string // event_type; "" ⇒ protection_event
-	Stage      string
-	Action     string
-	Reason     string
-	Model      string
-	Provider   string
-	Operation  string
-	Name       string // span / tool name
-	LatencyMS  float64
+	Type      string // event_type; "" ⇒ protection_event
+	Stage     string
+	Action    string
+	Reason    string
+	Model     string
+	Provider  string
+	Operation string
+	Name      string // span / tool name
+	LatencyMS float64
+	// InputTokens is the provider-reported UNCACHED input count. Cache reads/writes are
+	// reported separately below and are also input tokens — providers split them because they
+	// price differently, not because the model didn't process them. The wire carries the sum;
+	// see toWire.
 	InputTokens  int64
 	OutputTokens int64
 	TotalTokens  int64
-	Streaming    *bool // set on streamed model calls
-	Err          string
-	OccurredAt   time.Time
+	// Cache token counts, when the provider reports them (Anthropic prompt caching). These
+	// dominate real usage for long-running coding sessions: a turn commonly shows 2 uncached
+	// input tokens against ~380k cache reads, so omitting them understates input by orders of
+	// magnitude.
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	Streaming        *bool // set on streamed model calls
+	Err              string
+	OccurredAt       time.Time
 	// SessionID / RequestID correlate this record with the agent's other telemetry
 	// and prism's /check record for the same session. Sourced from CheckRequest.
 	SessionID string
@@ -62,13 +72,13 @@ func (e Event) isCheck() bool { return e.Type == "" || e.Type == EventProtection
 
 // Summary is an aggregate view over recorded events — the value Guard.Report() returns.
 type Summary struct {
-	Checks    int
-	Allowed   int
-	Denied    int
-	Warned    int
-	Errors    int
-	ByStage   map[string]int
-	TotalMS   float64
+	Checks  int
+	Allowed int
+	Denied  int
+	Warned  int
+	Errors  int
+	ByStage map[string]int
+	TotalMS float64
 }
 
 func (s Summary) String() string {
@@ -87,9 +97,9 @@ type Telemetry interface {
 // Noop discards events and reports an empty Summary.
 type Noop struct{}
 
-func (Noop) Record(Event)     {}
-func (Noop) Report() Summary  { return Summary{ByStage: map[string]int{}} }
-func (Noop) Close() error     { return nil }
+func (Noop) Record(Event)    {}
+func (Noop) Report() Summary { return Summary{ByStage: map[string]int{}} }
+func (Noop) Close() error    { return nil }
 
 // Recorder is the default in-memory telemetry: thread-safe aggregation, no I/O. Report reflects
 // everything recorded so far.

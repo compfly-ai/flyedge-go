@@ -117,27 +117,33 @@ type telemetryBatch struct {
 }
 
 type otelEvent struct {
-	Type           string `json:"type"`
-	Source         string `json:"source"`
-	RequestID      string `json:"request_id,omitempty"`
-	TraceID        string `json:"trace_id,omitempty"`
-	SpanID         string `json:"span_id,omitempty"`
-	ParentSpanID   string `json:"parent_span_id,omitempty"`
-	Name           string `json:"name,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Provider       string `json:"provider,omitempty"`
-	Operation      string `json:"operation,omitempty"`
-	InputTokens    uint64 `json:"input_tokens,omitempty"`
-	OutputTokens   uint64 `json:"output_tokens,omitempty"`
-	TotalTokens    uint64 `json:"total_tokens,omitempty"`
-	LatencyMS      uint64 `json:"latency_ms,omitempty"`
-	SessionID      string `json:"session_id,omitempty"`
-	Timestamp      string `json:"timestamp"`
-	AgentFramework string `json:"agent_framework,omitempty"`
-	Streaming      *bool  `json:"streaming,omitempty"`
-	RequestFull    string `json:"request_full,omitempty"`
-	ResponseFull   string `json:"response_full,omitempty"`
-	Data           any    `json:"data,omitempty"`
+	Type         string `json:"type"`
+	Source       string `json:"source"`
+	RequestID    string `json:"request_id,omitempty"`
+	TraceID      string `json:"trace_id,omitempty"`
+	SpanID       string `json:"span_id,omitempty"`
+	ParentSpanID string `json:"parent_span_id,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	Operation    string `json:"operation,omitempty"`
+	// InputTokens is the FULL input: uncached + cache read + cache write. The breakdown rides
+	// alongside so a consumer can price the tiers separately without a second round trip, and
+	// so nothing has to double-count to reconstruct the total.
+	InputTokens      uint64 `json:"input_tokens,omitempty"`
+	UncachedInTokens uint64 `json:"uncached_input_tokens,omitempty"`
+	CacheReadTokens  uint64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens uint64 `json:"cache_write_tokens,omitempty"`
+	OutputTokens     uint64 `json:"output_tokens,omitempty"`
+	TotalTokens      uint64 `json:"total_tokens,omitempty"`
+	LatencyMS        uint64 `json:"latency_ms,omitempty"`
+	SessionID        string `json:"session_id,omitempty"`
+	Timestamp        string `json:"timestamp"`
+	AgentFramework   string `json:"agent_framework,omitempty"`
+	Streaming        *bool  `json:"streaming,omitempty"`
+	RequestFull      string `json:"request_full,omitempty"`
+	ResponseFull     string `json:"response_full,omitempty"`
+	Data             any    `json:"data,omitempty"`
 }
 
 func toOtelEvents(evs []Event) []otelEvent {
@@ -152,27 +158,30 @@ func toOtelEvents(evs []Event) []otelEvent {
 			data = map[string]any{"stage": e.Stage, "action": e.Action, "reason": e.Reason, "error": e.Err}
 		}
 		out = append(out, otelEvent{
-			Type:           typ,
-			Source:         "sdk",
-			RequestID:      e.RequestID,
-			TraceID:        e.TraceID,
-			SpanID:         e.SpanID,
-			ParentSpanID:   e.ParentSpanID,
-			Name:           e.Name,
-			Model:          e.Model,
-			Provider:       e.Provider,
-			Operation:      e.Operation,
-			InputTokens:    u64(e.InputTokens),
-			OutputTokens:   u64(e.OutputTokens),
-			TotalTokens:    u64(e.TotalTokens),
-			LatencyMS:      uint64(e.LatencyMS),
-			SessionID:      e.SessionID,
-			Timestamp:      e.OccurredAt.UTC().Format(time.RFC3339),
-			AgentFramework: e.AgentFramework,
-			Streaming:      e.Streaming,
-			RequestFull:    e.RequestFull,
-			ResponseFull:   e.ResponseFull,
-			Data:           data,
+			Type:             typ,
+			Source:           "sdk",
+			RequestID:        e.RequestID,
+			TraceID:          e.TraceID,
+			SpanID:           e.SpanID,
+			ParentSpanID:     e.ParentSpanID,
+			Name:             e.Name,
+			Model:            e.Model,
+			Provider:         e.Provider,
+			Operation:        e.Operation,
+			InputTokens:      u64(e.InputTokens + e.CacheReadTokens + e.CacheWriteTokens),
+			UncachedInTokens: u64(e.InputTokens),
+			CacheReadTokens:  u64(e.CacheReadTokens),
+			CacheWriteTokens: u64(e.CacheWriteTokens),
+			OutputTokens:     u64(e.OutputTokens),
+			TotalTokens:      u64(e.TotalTokens + e.CacheReadTokens + e.CacheWriteTokens),
+			LatencyMS:        uint64(e.LatencyMS),
+			SessionID:        e.SessionID,
+			Timestamp:        e.OccurredAt.UTC().Format(time.RFC3339),
+			AgentFramework:   e.AgentFramework,
+			Streaming:        e.Streaming,
+			RequestFull:      e.RequestFull,
+			ResponseFull:     e.ResponseFull,
+			Data:             data,
 		})
 	}
 	return out

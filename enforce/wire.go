@@ -4,8 +4,10 @@
 package enforce
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"time"
 )
 
@@ -140,6 +142,21 @@ func (r *CheckRequest) fillDefaults() {
 			r.Content.Preview = r.Content.Preview[:200]
 		}
 	}
+	// Correlation id. The transport wrap sets its own per-LLM-call id, but direct Check callers
+	// (the stage helpers, the flyedged hook path) previously left this empty, so their decisions
+	// landed in the observability layer with no request_id and could not be joined to anything.
+	if r.RequestID == "" {
+		r.RequestID = "req-" + randRequestHex()
+	}
+}
+
+// randRequestHex returns 16 hex chars for a synthesized request id.
+func randRequestHex() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return hex.EncodeToString([]byte(strconv.FormatInt(timeNowMS(), 10)))
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // KillInfo describes an active kill switch matching a request. Full-scope kills arrive as a 403
