@@ -9,8 +9,7 @@ import (
 // Identity-attribution headers prism reads on /v1/flyedge/check. These are NOT validated credentials
 // on their own — prism trusts them on the strength of the DID-signed channel (the Ed25519 signature
 // covers the body + timestamp, not the header set); the real credential is the raw token in the
-// request body. The names + value formats are the frozen wire contract, verified against
-// prism.
+// request body. The names + value formats are the frozen wire contract, verified against prism.
 const (
 	// HeaderOBOPrincipal carries the on-behalf-of envelope as base64url(JSON) with NO padding
 	// (prism decodes URL_SAFE_NO_PAD). prism extracts provider/upn (+ urn/scope) for governance.
