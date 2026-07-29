@@ -205,7 +205,9 @@ func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.
 	return t.base.RoundTrip(req)
 }
 
-// extractor pulls (prompt, model) from a provider request body.
+// extractor pulls the latest user message and model from a provider request body.
+// Pre-LLM content controls must inspect untrusted user input, not trusted system
+// instructions or assistant/tool history.
 type extractor func(body []byte) (prompt, model string)
 
 // extractorFor selects the provider extractor for a host+path, or nil if the host isn't a known
@@ -224,11 +226,10 @@ func extractorFor(host, path string) extractor {
 	}
 }
 
-// extractAnthropic reads system + messages text from an Anthropic /v1/messages body.
+// extractAnthropic reads the latest user message from an Anthropic /v1/messages body.
 func extractAnthropic(body []byte) (string, string) {
 	var req struct {
-		Model    string          `json:"model"`
-		System   json.RawMessage `json:"system"`
+		Model    string `json:"model"`
 		Messages []struct {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
@@ -237,19 +238,15 @@ func extractAnthropic(body []byte) (string, string) {
 	if json.Unmarshal(body, &req) != nil {
 		return string(body), ""
 	}
-	var b strings.Builder
-	if s := contentText(req.System); s != "" {
-		b.WriteString(s + "\n")
-	}
-	for _, m := range req.Messages {
-		if t := contentText(m.Content); t != "" {
-			b.WriteString(m.Role + ": " + t + "\n")
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			return contentText(req.Messages[i].Content), req.Model
 		}
 	}
-	return strings.TrimSpace(b.String()), req.Model
+	return "", req.Model
 }
 
-// extractOpenAI reads messages text from an OpenAI /v1/chat/completions body.
+// extractOpenAI reads the latest user message from an OpenAI /v1/chat/completions body.
 func extractOpenAI(body []byte) (string, string) {
 	var req struct {
 		Model    string `json:"model"`
@@ -261,13 +258,12 @@ func extractOpenAI(body []byte) (string, string) {
 	if json.Unmarshal(body, &req) != nil {
 		return string(body), ""
 	}
-	var b strings.Builder
-	for _, m := range req.Messages {
-		if t := contentText(m.Content); t != "" {
-			b.WriteString(m.Role + ": " + t + "\n")
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			return contentText(req.Messages[i].Content), req.Model
 		}
 	}
-	return strings.TrimSpace(b.String()), req.Model
+	return "", req.Model
 }
 
 // contentText extracts text from a message content field that may be a plain string or an array of
