@@ -52,8 +52,8 @@ func doThroughWrap(t *testing.T, rec *recordingEnforcer, url, body string) (forw
 // TestWrapGovernsAnthropicAndOpenAI: ONE wrap extracts the prompt from both providers' request
 // shapes and runs the check. Proves the design isn't Anthropic-specific.
 func TestWrapGovernsAnthropicAndOpenAI(t *testing.T) {
-	anthropicBody := `{"model":"claude-haiku-4-5","system":"be helpful","messages":[{"role":"user","content":"hello from anthropic"}]}`
-	openaiBody := `{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"text","text":"hello from openai"}]}]}`
+	anthropicBody := `{"model":"claude-haiku-4-5","system":"trusted system instructions","messages":[{"role":"user","content":"old anthropic message"},{"role":"assistant","content":"prior response"},{"role":"user","content":"hello from anthropic"}]}`
+	openaiBody := `{"model":"gpt-4o","messages":[{"role":"system","content":"trusted system instructions"},{"role":"user","content":"old openai message"},{"role":"assistant","content":"prior response"},{"role":"user","content":[{"type":"text","text":"hello from openai"}]}]}`
 
 	cases := []struct {
 		name, url, body, wantModel, wantSubstr string
@@ -76,6 +76,11 @@ func TestWrapGovernsAnthropicAndOpenAI(t *testing.T) {
 			}
 			if !strings.Contains(rec.last.Content.Full, c.wantSubstr) {
 				t.Errorf("extracted prompt %q missing %q", rec.last.Content.Full, c.wantSubstr)
+			}
+			if strings.Contains(rec.last.Content.Full, "trusted system instructions") ||
+				strings.Contains(rec.last.Content.Full, "old ") ||
+				strings.Contains(rec.last.Content.Full, "prior response") {
+				t.Errorf("extracted prompt contains trusted or stale conversation content: %q", rec.last.Content.Full)
 			}
 			if rec.last.Stage != flyedge.StagePreLLM {
 				t.Errorf("stage = %q", rec.last.Stage)
