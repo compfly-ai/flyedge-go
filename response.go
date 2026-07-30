@@ -35,6 +35,8 @@ func respExtractorFor(host string) respExtractor {
 		return completionAnthropic
 	case strings.Contains(host, "openai.com"):
 		return completionOpenAI
+	case strings.Contains(host, "generativelanguage.googleapis.com"):
+		return completionGemini
 	default:
 		return completionOpenAI // OpenAI-compatible default
 	}
@@ -54,6 +56,28 @@ func completionAnthropic(body []byte) string {
 	for _, c := range r.Content {
 		if c.Text != "" {
 			b.WriteString(c.Text)
+		}
+	}
+	return b.String()
+}
+
+func completionGemini(body []byte) string {
+	var r struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	if json.Unmarshal(body, &r) != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, c := range r.Candidates {
+		for _, p := range c.Content.Parts {
+			b.WriteString(p.Text)
 		}
 	}
 	return b.String()
@@ -108,9 +132,13 @@ func (m *streamMonitor) Close() error {
 	return err
 }
 
-// sseCompletion reconstructs the completion text from accumulated SSE bytes, for either provider's
-// delta format (Anthropic content_block_delta{delta.text}; OpenAI choices[].delta.content).
+// sseCompletion reconstructs the completion text from accumulated SSE bytes, for any of the three
+// providers' delta formats (Anthropic content_block_delta{delta.text}; OpenAI
+// choices[].delta.content; Gemini streamGenerateContent?alt=sse repeats the full
+// candidates[].content.parts[].text shape per chunk rather than a delta). host picks the Gemini
+// parse path since its per-chunk shape overlaps structurally with the others' field names.
 func sseCompletion(host string, raw []byte) string {
+	gemini := strings.Contains(host, "generativelanguage.googleapis.com")
 	var b strings.Builder
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
@@ -122,6 +150,10 @@ func sseCompletion(host string, raw []byte) string {
 		}
 		data = strings.TrimSpace(data)
 		if data == "" || data == "[DONE]" {
+			continue
+		}
+		if gemini {
+			b.WriteString(completionGemini([]byte(data)))
 			continue
 		}
 		// Anthropic: {"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}

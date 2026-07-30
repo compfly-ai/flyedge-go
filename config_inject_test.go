@@ -45,6 +45,37 @@ func TestConfigInjectRewrite(t *testing.T) {
 		t.Fatalf("first message should be the injected system message: %v", msgs[0])
 	}
 
+	// Gemini style — contents array with no systemInstruction: one is created.
+	out = configInjectRewrite([]byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`), payload)
+	var e map[string]any
+	_ = json.Unmarshal(out, &e)
+	instr, ok := e["systemInstruction"].(map[string]any)
+	if !ok {
+		t.Fatalf("gemini systemInstruction not created: %v", e["systemInstruction"])
+	}
+	parts, ok := instr["parts"].([]any)
+	if !ok || len(parts) != 1 {
+		t.Fatalf("gemini systemInstruction.parts wrong shape: %v", instr["parts"])
+	}
+	firstPart, _ := parts[0].(map[string]any)
+	if firstPart["text"] != payload {
+		t.Fatalf("gemini systemInstruction part should be the payload: %v", parts[0])
+	}
+
+	// Gemini style — contents array with an existing systemInstruction: payload prepended.
+	out = configInjectRewrite([]byte(`{"systemInstruction":{"parts":[{"text":"base"}]},"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`), payload)
+	var f map[string]any
+	_ = json.Unmarshal(out, &f)
+	instr2, _ := f["systemInstruction"].(map[string]any)
+	parts2, _ := instr2["parts"].([]any)
+	if len(parts2) != 2 {
+		t.Fatalf("expected 2 systemInstruction parts after inject, got %d", len(parts2))
+	}
+	p0, _ := parts2[0].(map[string]any)
+	if p0["text"] != payload {
+		t.Fatalf("first systemInstruction part should be the payload: %v", parts2[0])
+	}
+
 	// Unknown shape — a system field is set as a fallback.
 	out = configInjectRewrite([]byte(`{"model":"x"}`), payload)
 	var d map[string]any

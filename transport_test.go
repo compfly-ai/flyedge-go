@@ -49,17 +49,19 @@ func doThroughWrap(t *testing.T, rec *recordingEnforcer, url, body string) (forw
 	return base.called, err
 }
 
-// TestWrapGovernsAnthropicAndOpenAI: ONE wrap extracts the prompt from both providers' request
+// TestWrapGovernsAnthropicAndOpenAI: ONE wrap extracts the prompt from all three providers' request
 // shapes and runs the check. Proves the design isn't Anthropic-specific.
 func TestWrapGovernsAnthropicAndOpenAI(t *testing.T) {
 	anthropicBody := `{"model":"claude-haiku-4-5","system":"trusted system instructions","messages":[{"role":"user","content":"old anthropic message"},{"role":"assistant","content":"prior response"},{"role":"user","content":"hello from anthropic"}]}`
 	openaiBody := `{"model":"gpt-4o","messages":[{"role":"system","content":"trusted system instructions"},{"role":"user","content":"old openai message"},{"role":"assistant","content":"prior response"},{"role":"user","content":[{"type":"text","text":"hello from openai"}]}]}`
+	geminiBody := `{"systemInstruction":{"parts":[{"text":"trusted system instructions"}]},"contents":[{"role":"user","parts":[{"text":"old gemini message"}]},{"role":"model","parts":[{"text":"prior response"}]},{"role":"user","parts":[{"text":"hello from gemini"}]}]}`
 
 	cases := []struct {
 		name, url, body, wantModel, wantSubstr string
 	}{
 		{"anthropic", "https://api.anthropic.com/v1/messages", anthropicBody, "claude-haiku-4-5", "hello from anthropic"},
 		{"openai", "https://api.openai.com/v1/chat/completions", openaiBody, "gpt-4o", "hello from openai"},
+		{"gemini", "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent", geminiBody, "gemini-1.5-pro", "hello from gemini"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

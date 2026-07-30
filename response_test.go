@@ -56,6 +56,47 @@ func TestPostLLMBlocksNonStreaming(t *testing.T) {
 	}
 }
 
+func TestPostLLMBlocksNonStreamingGemini(t *testing.T) {
+	enf := &stageEnforcer{}
+	g, _ := flyedge.New(flyedge.Config{}, flyedge.WithEnforcer(enf))
+	base := &respBase{body: `{"candidates":[{"content":{"parts":[{"text":"leaked secret sk-123"}],"role":"model"}}]}`}
+	client := &http.Client{Transport: g.WrapRoundTripper(base, flyedge.WithResponseCheck())}
+
+	req, _ := http.NewRequest(http.MethodPost, "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
+		strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`))
+	_, err := client.Do(req)
+	if de, ok := flyedge.AsDenyError(err); !ok || de.Decision.Reason != "output_policy" {
+		t.Fatalf("post_llm deny should block the response; got err=%v", err)
+	}
+	if enf.last != "post_llm" {
+		t.Errorf("last stage = %q, want post_llm", enf.last)
+	}
+}
+
+func TestPostLLMMonitorsStreamingGemini(t *testing.T) {
+	enf := &stageEnforcer{}
+	g, _ := flyedge.New(flyedge.Config{}, flyedge.WithEnforcer(enf))
+	sse := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hello \"}],\"role\":\"model\"}}]}\n\n" +
+		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"world\"}],\"role\":\"model\"}}]}\n\n"
+	base := &respBase{stream: true, body: sse}
+	client := &http.Client{Transport: g.WrapRoundTripper(base, flyedge.WithResponseCheck())}
+
+	req, _ := http.NewRequest(http.MethodPost, "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent",
+		strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`))
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("streaming should NOT error (monitor-only): %v", err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(got), "hello") {
+		t.Errorf("stream body not passed through: %q", got)
+	}
+	_ = resp.Body.Close()
+	if enf.last != "post_llm" {
+		t.Errorf("post_llm check should run on stream close; last=%q", enf.last)
+	}
+}
+
 func TestPostLLMMonitorsStreaming(t *testing.T) {
 	// Streaming: the response is delivered (monitor-only), and the post_llm check runs on Close
 	// over the accumulated completion — it cannot block already-sent tokens.

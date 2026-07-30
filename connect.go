@@ -186,6 +186,8 @@ func providerFor(model string) string {
 		return "anthropic"
 	case strings.HasPrefix(model, "gpt") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3"):
 		return "openai"
+	case strings.HasPrefix(model, "gemini"):
+		return "gemini"
 	default:
 		return "unknown"
 	}
