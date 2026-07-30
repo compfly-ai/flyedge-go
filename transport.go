@@ -37,14 +37,17 @@ func (g *Guard) WrapRoundTripper(base http.RoundTripper, opts ...WrapOption) htt
 // configInjectRewrite inserts an adversarial system message into an LLM request body. It is
 // structural (not provider-hardcoded): an Anthropic-style body (top-level `system`) has the message
 // prepended to system; an OpenAI-style body (a `messages` array) gets a system message inserted at
-// the front. Unknown shapes are left unchanged. Used only by the attack injector (config_inject).
+// the front; a Gemini-style body (a `contents` array) gets the message prepended to
+// `systemInstruction`. Unknown shapes are left unchanged. Used only by the attack injector
+// (config_inject).
 func configInjectRewrite(body []byte, sysMsg string) []byte {
 	var m map[string]any
 	if json.Unmarshal(body, &m) != nil {
 		return body
 	}
-	if sys, hasSystem := m["system"]; hasSystem {
-		switch s := sys.(type) {
+	switch {
+	case func() bool { _, ok := m["system"]; return ok }():
+		switch s := m["system"].(type) {
 		case string:
 			m["system"] = sysMsg + "\n\n" + s
 		case []any:
@@ -52,9 +55,20 @@ func configInjectRewrite(body []byte, sysMsg string) []byte {
 		default:
 			m["system"] = sysMsg
 		}
-	} else if msgs, ok := m["messages"].([]any); ok {
+	case func() bool { _, ok := m["messages"].([]any); return ok }():
+		msgs := m["messages"].([]any)
 		m["messages"] = append([]any{map[string]any{"role": "system", "content": sysMsg}}, msgs...)
-	} else {
+	case func() bool { _, ok := m["contents"]; return ok }():
+		if instr, ok := m["systemInstruction"].(map[string]any); ok {
+			if parts, ok := instr["parts"].([]any); ok {
+				instr["parts"] = append([]any{map[string]any{"text": sysMsg}}, parts...)
+			} else {
+				instr["parts"] = []any{map[string]any{"text": sysMsg}}
+			}
+		} else {
+			m["systemInstruction"] = map[string]any{"parts": []any{map[string]any{"text": sysMsg}}}
+		}
+	default:
 		m["system"] = sysMsg
 	}
 	if b, err := json.Marshal(m); err == nil {
@@ -218,6 +232,11 @@ func extractorFor(host, path string) extractor {
 		return extractAnthropic
 	case strings.Contains(host, "openai.com") && strings.Contains(path, "/chat/completions"):
 		return extractOpenAI
+	// Gemini (Google AI Studio / generativelanguage) carries the model in the URL path
+	// (/v1beta/models/{model}:generateContent), not the body, so the path is captured here.
+	case strings.Contains(host, "generativelanguage.googleapis.com") && strings.Contains(path, "/models/"):
+		p := path
+		return func(body []byte) (string, string) { return extractGemini(body, p) }
 	// Azure OpenAI and OpenAI-compatible gateways also use /chat/completions:
 	case strings.Contains(path, "/chat/completions"):
 		return extractOpenAI
@@ -264,6 +283,48 @@ func extractOpenAI(body []byte) (string, string) {
 		}
 	}
 	return "", req.Model
+}
+
+// extractGemini reads the latest user message from a Gemini generateContent/streamGenerateContent
+// body ({"contents":[{"role":"user","parts":[{"text":"..."}]}]}); the model comes from the URL path
+// since Gemini doesn't carry it in the body.
+func extractGemini(body []byte, path string) (string, string) {
+	model := geminiModelFromPath(path)
+	var req struct {
+		Contents []struct {
+			Role  string `json:"role"`
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"contents"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return string(body), model
+	}
+	for i := len(req.Contents) - 1; i >= 0; i-- {
+		if req.Contents[i].Role == "user" {
+			var b strings.Builder
+			for _, p := range req.Contents[i].Parts {
+				b.WriteString(p.Text)
+			}
+			return b.String(), model
+		}
+	}
+	return "", model
+}
+
+// geminiModelFromPath pulls the model id out of a Gemini path like
+// "/v1beta/models/gemini-1.5-pro:generateContent" -> "gemini-1.5-pro".
+func geminiModelFromPath(path string) string {
+	i := strings.LastIndex(path, "/models/")
+	if i < 0 {
+		return ""
+	}
+	rest := path[i+len("/models/"):]
+	if j := strings.IndexByte(rest, ':'); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest
 }
 
 // contentText extracts text from a message content field that may be a plain string or an array of

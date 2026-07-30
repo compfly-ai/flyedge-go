@@ -6,8 +6,10 @@
 // logic is shared with the library, not duplicated.
 //
 // Routing (by path):
-//   POST /v1/chat/completions  → https://api.openai.com     (point the OpenAI SDK base_url here)
-//   POST /v1/messages          → https://api.anthropic.com  (point the Anthropic SDK base_url here)
+//
+//	POST /v1/chat/completions        → https://api.openai.com                    (point the OpenAI SDK base_url here)
+//	POST /v1/messages                → https://api.anthropic.com                 (point the Anthropic SDK base_url here)
+//	POST /v1beta/models/{model}:...  → https://generativelanguage.googleapis.com (point the Gemini SDK base_url here)
 //
 // The agent still sends its own provider API key (Authorization/x-api-key); the proxy forwards it
 // unchanged — it never needs the provider credential itself.
@@ -25,6 +27,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 
 	flyedge "github.com/compfly-ai/flyedge-go"
 )
@@ -33,6 +36,29 @@ import (
 var upstreams = map[string]*url.URL{
 	"/v1/chat/completions": mustURL("https://api.openai.com"),
 	"/v1/messages":         mustURL("https://api.anthropic.com"),
+}
+
+// upstreamPrefixes handles providers whose path carries a dynamic model id, so an exact-match entry
+// in upstreams can't cover it — Gemini's is "/v1beta/models/{model}:generateContent".
+var upstreamPrefixes = []struct {
+	prefix string
+	url    *url.URL
+}{
+	{"/v1beta/models/", mustURL("https://generativelanguage.googleapis.com")},
+}
+
+// upstreamFor resolves the real provider origin for a request path: an exact match first, then a
+// prefix match for providers with a dynamic path segment.
+func upstreamFor(path string) *url.URL {
+	if u, ok := upstreams[path]; ok {
+		return u
+	}
+	for _, p := range upstreamPrefixes {
+		if strings.HasPrefix(path, p.prefix) {
+			return p.url
+		}
+	}
+	return nil
 }
 
 func main() {
@@ -53,12 +79,12 @@ func run() error {
 	// before forwarding. A Deny surfaces as a *DenyError from RoundTrip → ErrorHandler → 403.
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			up := upstreams[pr.In.URL.Path]
+			up := upstreamFor(pr.In.URL.Path)
 			if up == nil {
 				return // unknown path: leave as-is; check-transport passes it through, forward 502s
 			}
-			pr.SetURL(up)                // scheme+host → provider
-			pr.Out.Host = up.Host        // Host header the provider expects
+			pr.SetURL(up)         // scheme+host → provider
+			pr.Out.Host = up.Host // Host header the provider expects
 			// carry an explicit session (from the client header) into the guard check
 			if sid := pr.In.Header.Get("X-Session-Id"); sid != "" {
 				pr.Out = pr.Out.WithContext(flyedge.ContextWithSession(pr.Out.Context(), sid))
@@ -84,7 +110,7 @@ func run() error {
 	mux.Handle("/", rp)
 
 	addr := envOr("LISTEN_ADDR", ":9000")
-	log.Printf("flyedge-proxy listening on %s (guard DID=%s) — route /v1/chat/completions→openai, /v1/messages→anthropic", addr, guard.DID())
+	log.Printf("flyedge-proxy listening on %s (guard DID=%s) — route /v1/chat/completions→openai, /v1/messages→anthropic, /v1beta/models/*→gemini", addr, guard.DID())
 	return http.ListenAndServe(addr, mux)
 }
 
