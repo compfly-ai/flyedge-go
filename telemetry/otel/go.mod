@@ -1,6 +1,6 @@
 module github.com/compfly-ai/flyedge-go/telemetry/otel
 
-go 1.26.4
+go 1.23.0
 
 replace github.com/compfly-ai/flyedge-go => ../../
 
@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect

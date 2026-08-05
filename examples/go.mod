@@ -1,6 +1,6 @@
 module github.com/compfly-ai/flyedge-go/examples
 
-go 1.26.4
+go 1.25.0
 
 replace github.com/compfly-ai/flyedge-go => ../
 
