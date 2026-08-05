@@ -1,0 +1,78 @@
+name: release
+
+# Publishing a Go module is just pushing a tag — the module proxy does the rest.
+# This workflow gates that tag on a green build and then cuts the GitHub release.
+#
+# Only the root module is released here. The nested `telemetry/otel` module
+# releases under its own `telemetry/otel/vX.Y.Z` tag, which does not match the
+# `v*` filter below.
+#
+# NOTE: proxy.golang.org caches a version permanently the first time it is
+# fetched. A tag cannot be recalled once published — only superseded.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds at the floor declared in go.mod, so a release can never depend on
+      # a toolchain newer than what consumers are told they need.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Tag is semver
+        run: |
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH"; exit 1 ;;
+          esac
+
+      - name: License files present
+        run: test -f LICENSE && test -f NOTICE
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -count=1
+
+      - name: Nested modules build
+        run: |
+          for m in telemetry/otel examples; do
+            echo "--- $m"
+            (cd "$m" && go build ./...)
+          done
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+      # Makes `go get` work immediately instead of on first cold fetch.
+      - name: Warm the module proxy
+        env:
+          GOPROXY: https://proxy.golang.org
+          GOFLAGS: -mod=mod
+        run: go list -m "github.com/compfly-ai/flyedge-go@$GITHUB_REF_NAME" || true
