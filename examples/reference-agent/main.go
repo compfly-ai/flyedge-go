@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command reference-agent is a complete, runnable demonstration of the flyedge Go guard governing a
 // real Claude tool-use agent against the local Compfly platform. It shows, end to end, how the
 // guard works in practice:

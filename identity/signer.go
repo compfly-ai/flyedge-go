@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Package identity implements the flyedge DID + Ed25519 request-signing contract. The wire format
 // is fixed to match prism and policy-enforcer: the signature is Ed25519
 // over SHA-256(ascii(decimal(timestamp_ms)) || body), and the key id is the first 32 hex chars of

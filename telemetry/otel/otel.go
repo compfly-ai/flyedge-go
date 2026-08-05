@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Package otel provides an OpenTelemetry telemetry sink for flyedge: it emits one OTel span per
 // policy check to the caller's own tracer, so flyedge protection events (stage, allow/deny/warn,
 // model, latency) surface in the caller's EXISTING observability pipeline — their collector,

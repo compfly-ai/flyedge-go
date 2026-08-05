@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command tools is a flyedge-governed Anthropic tool-use agent. Claude may request a `fetch_url`
 // tool; the agent runs guard.CheckToolCall (the tool_call stage) BEFORE executing it, so policy can
 // allow or DENY the tool invocation — e.g. deny egress to an external destination. This governs the

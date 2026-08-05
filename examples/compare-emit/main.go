@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // compare-emit runs a fixed agent transcript through flyedge-go and prints one JSON decision per
 // turn. Its Rust twin (flyedge-rs/examples/emit_decisions.rs) runs the IDENTICAL turns; a driver
 // (flyedge-rs/examples/compare_go_rust.sh) diffs the two so we can assert Go and Rust produce the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Package flyedge is a Go agent-protection SDK, wire-compatible with the prism/policy-enforcer
 // gateway. It is deliberately explicit ("gothonic"): construct a *Guard, pass it, and route calls
 // through Guard.Check — no import-time monkeypatching, no ambient singletons, and a policy denial

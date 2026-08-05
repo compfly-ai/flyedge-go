@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command docs-quickstart is the runnable form of the "Complete Example" in
 // docs/DEVELOPER_GUIDE_GO.md. It is intentionally minimal — a single model turn
 // with one governed tool (get_weather) — so the guide's headline snippet is real,

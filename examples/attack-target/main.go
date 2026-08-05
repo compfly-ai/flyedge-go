@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command attack-target is a minimal flyedge-governed agent purpose-built to exercise the Phase B2
 // attack injector. When a simulation runs against it in ATTACK mode, two things happen automatically:
 //

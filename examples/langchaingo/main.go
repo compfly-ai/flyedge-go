@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command langchaingo shows the SAME flyedge transport wrap governing a THIRD framework —
 // langchaingo — with no framework-specific code. langchaingo's Anthropic LLM accepts a custom HTTP
 // client (WithHTTPClient), so installing guard.WrapRoundTripper governs its model calls exactly as
