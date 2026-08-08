@@ -46,6 +46,17 @@ type LLMCall struct {
 
 	LatencyMS float64
 	Streamed  *bool
+
+	// Delegation, for a call made by a subagent rather than by the agent's main loop. A subagent
+	// runs inside its parent and reports the parent's SessionID, so without these its spend is
+	// indistinguishable from work the parent did itself.
+	//
+	// AgentID names the subagent; ParentSpanID nests the call under the work that spawned it;
+	// ComponentName carries the subagent's type when the host reports one. All optional — a call
+	// from the main loop leaves them empty and emits exactly as before.
+	AgentID       string
+	ParentSpanID  string
+	ComponentName string
 }
 
 // RecordLLMCallDetail emits an llm_io event from a full LLMCall, including cache tiers. Prefer it
@@ -55,7 +66,7 @@ func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 	if g == nil || g.tel == nil {
 		return
 	}
-	g.tel.Record(telemetry.Event{
+	ev := telemetry.Event{
 		Type: telemetry.EventLLMIO, SessionID: c.SessionID, RequestID: c.RequestID,
 		Model: c.Model, Provider: c.Provider, Operation: "chat",
 		InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
@@ -63,7 +74,20 @@ func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 		CacheReadTokens:  c.CacheReadTokens,
 		CacheWriteTokens: c.CacheWriteTokens,
 		LatencyMS:        c.LatencyMS, Streaming: c.Streamed, OccurredAt: time.Now(),
-	})
+		Name:         c.ComponentName,
+		ParentSpanID: c.ParentSpanID,
+	}
+	// A delegated call is attributed to the subagent that made it. The agent id itself stays the
+	// authenticated agent's — the platform resolves that from the batch, and overwriting it here
+	// would misattribute the spend to a subagent that holds no identity of its own.
+	if c.AgentID != "" {
+		ev.SpanID = c.AgentID
+		ev.Data = map[string]any{"delegated": true, "subagent_id": c.AgentID}
+		if c.ComponentName != "" {
+			ev.Data["subagent_type"] = c.ComponentName
+		}
+	}
+	g.tel.Record(ev)
 }
 
 func (g *Guard) emitLLM(sessionID, requestID, model, provider string, inputTokens, outputTokens int64, latencyMS float64, streamed *bool) {
