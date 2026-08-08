@@ -13,6 +13,15 @@ import (
 // policy can allow/deny the call (e.g. deny egress to an external destination). args is serialized
 // as the inspected content; destDomain is the tool's target (host/service) if it has one.
 func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, args any, destDomain string) (Decision, error) {
+	return g.CheckMCPToolCall(ctx, session, "", toolName, args, destDomain)
+}
+
+// CheckMCPToolCall gates a tool invocation served by an MCP server, naming the server separately
+// from the tool. Callers that know the tool came from MCP should prefer it over CheckToolCall:
+// mcpServer is what joins the call to a sanctioned/unsanctioned component, so a fused
+// "server__tool" string in toolName alone leaves the server unqueryable. An empty mcpServer
+// behaves exactly like CheckToolCall.
+func (g *Guard) CheckMCPToolCall(ctx context.Context, session, mcpServer, toolName string, args any, destDomain string) (Decision, error) {
 	return g.Check(ctx, CheckRequest{
 		SessionID:     session,
 		Stage:         StageToolCall,
@@ -20,13 +29,26 @@ func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, arg
 		ComponentName: toolName,
 		MethodName:    "call",
 		Content:       Content{Full: jsonString(args)},
-		Operation:     Operation{Type: "tool.call", ToolName: toolName, DestDomain: destDomain, ToolArgsJSON: jsonString(args)},
+		Operation: Operation{
+			Type:         "tool.call",
+			ToolName:     toolName,
+			DestDomain:   destDomain,
+			ToolArgsJSON: jsonString(args),
+			MCPServerID:  mcpServer,
+		},
 	})
 }
 
 // CheckToolResponse gates a tool's output (the tool_call_response stage): run it on the result
 // before feeding it back to the model, so policy can inspect returned content.
 func (g *Guard) CheckToolResponse(ctx context.Context, session, toolName string, result any) (Decision, error) {
+	return g.CheckMCPToolResponse(ctx, session, "", toolName, result)
+}
+
+// CheckMCPToolResponse gates the output of an MCP-served tool, naming the server separately. The
+// response stage carries the server too so a returning call joins to the same component as the
+// outgoing one. An empty mcpServer behaves exactly like CheckToolResponse.
+func (g *Guard) CheckMCPToolResponse(ctx context.Context, session, mcpServer, toolName string, result any) (Decision, error) {
 	return g.Check(ctx, CheckRequest{
 		SessionID:     session,
 		Stage:         StageToolCallResponse,
@@ -34,7 +56,7 @@ func (g *Guard) CheckToolResponse(ctx context.Context, session, toolName string,
 		ComponentName: toolName,
 		MethodName:    "response",
 		Content:       Content{Full: jsonString(result)},
-		Operation:     Operation{Type: "tool.response", ToolName: toolName},
+		Operation:     Operation{Type: "tool.response", ToolName: toolName, MCPServerID: mcpServer},
 	})
 }
 
