@@ -2,6 +2,8 @@ package edgesync_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -185,6 +187,140 @@ func TestStop_HaltsTheLoop(t *testing.T) {
 	if got := atomic.LoadInt32(&ft.getCalls); got != n {
 		t.Errorf("GetSigned called %d more times after Stop", got-n)
 	}
+}
+
+// conditionalTransport implements the optional conditionalGetter capability, answering 304 when
+// the caller's If-None-Match matches what it would have sent.
+type conditionalTransport struct {
+	mu           sync.Mutex
+	body         []byte
+	etag         string
+	lastIfNone   string
+	notModifieds int32
+	fullSends    int32
+}
+
+func (c *conditionalTransport) GetSigned(context.Context, string, map[string]string) ([]byte, error) {
+	return nil, nil // unused — the conditional path takes precedence
+}
+
+func (c *conditionalTransport) PostSigned(context.Context, string, []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (c *conditionalTransport) GetSignedConditional(_ context.Context, _ string, headers map[string]string) ([]byte, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastIfNone = headers["If-None-Match"]
+	if c.lastIfNone != "" && c.lastIfNone == c.etag {
+		atomic.AddInt32(&c.notModifieds, 1)
+		return nil, true, nil
+	}
+	atomic.AddInt32(&c.fullSends, 1)
+	return c.body, false, nil
+}
+
+func (c *conditionalTransport) set(body []byte, etag string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.body = body
+	c.etag = etag
+}
+
+// The steady state — the overwhelmingly common case — must transfer nothing: first poll gets the
+// body, every later poll gets a 304 and reports no change.
+func TestPoll_ConditionalGet_SteadyStateSends304(t *testing.T) {
+	body := []byte(`{"packs":[{"slug":"a"}]}`)
+	ct := &conditionalTransport{}
+	ct.set(body, contentHashForTest(body))
+	s := edgesync.New(ct, "/p", time.Hour)
+
+	raw, changed, err := s.Poll(context.Background())
+	if err != nil || !changed || string(raw) != string(body) {
+		t.Fatalf("first poll: changed=%v err=%v raw=%s", changed, err, raw)
+	}
+	if got := atomic.LoadInt32(&ct.fullSends); got != 1 {
+		t.Fatalf("expected 1 full send, got %d", got)
+	}
+
+	for i := 0; i < 3; i++ {
+		raw, changed, err = s.Poll(context.Background())
+		if err != nil || changed || raw != nil {
+			t.Fatalf("steady-state poll %d: changed=%v err=%v raw=%v (want no change, no body)", i, changed, err, raw)
+		}
+	}
+	if got := atomic.LoadInt32(&ct.notModifieds); got != 3 {
+		t.Errorf("expected 3 not-modified responses, got %d", got)
+	}
+	if got := atomic.LoadInt32(&ct.fullSends); got != 1 {
+		t.Errorf("expected still 1 full send after steady state, got %d", got)
+	}
+}
+
+// When the content genuinely changes the ETag no longer matches, so the body comes back and the
+// caller is told to act on it.
+func TestPoll_ConditionalGet_ChangeBreaksTheMatch(t *testing.T) {
+	v1 := []byte(`{"packs":[{"slug":"a"}]}`)
+	v2 := []byte(`{"packs":[{"slug":"a"},{"slug":"b"}]}`)
+	ct := &conditionalTransport{}
+	ct.set(v1, contentHashForTest(v1))
+	s := edgesync.New(ct, "/p", time.Hour)
+
+	if _, changed, _ := s.Poll(context.Background()); !changed {
+		t.Fatal("first poll should report change")
+	}
+	if _, changed, _ := s.Poll(context.Background()); changed {
+		t.Fatal("second poll (unchanged) should not report change")
+	}
+
+	ct.set(v2, contentHashForTest(v2))
+	raw, changed, err := s.Poll(context.Background())
+	if err != nil || !changed || string(raw) != string(v2) {
+		t.Fatalf("after change: changed=%v err=%v raw=%s", changed, err, raw)
+	}
+}
+
+// The very first poll has nothing to compare against, so it must not send a stale/empty
+// If-None-Match that a server could accidentally match.
+func TestPoll_ConditionalGet_FirstPollSendsNoIfNoneMatch(t *testing.T) {
+	body := []byte(`{}`)
+	ct := &conditionalTransport{}
+	ct.set(body, contentHashForTest(body))
+	s := edgesync.New(ct, "/p", time.Hour)
+
+	if _, _, err := s.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ct.mu.Lock()
+	got := ct.lastIfNone
+	ct.mu.Unlock()
+	if got != "" {
+		t.Errorf("first poll sent If-None-Match %q, want empty", got)
+	}
+}
+
+// A Transport WITHOUT the optional capability must keep working unchanged — same change
+// detection, just a full body every time.
+func TestPoll_FallsBackWhenTransportHasNoConditionalSupport(t *testing.T) {
+	ft := &fakeTransport{pollBody: []byte(`{"v":1}`)}
+	s := edgesync.New(ft, "/p", time.Hour)
+
+	if _, changed, err := s.Poll(context.Background()); err != nil || !changed {
+		t.Fatalf("first poll: changed=%v err=%v", changed, err)
+	}
+	if _, changed, err := s.Poll(context.Background()); err != nil || changed {
+		t.Fatalf("second poll: changed=%v err=%v (want no change)", changed, err)
+	}
+	if atomic.LoadInt32(&ft.getCalls) != 2 {
+		t.Errorf("expected 2 plain GETs, got %d", atomic.LoadInt32(&ft.getCalls))
+	}
+}
+
+// contentHashForTest mirrors the package's internal content hash so a fake server can compute the
+// same ETag the Syncer will compare against.
+func contentHashForTest(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 func waitFor(t *testing.T, cond func() bool) {

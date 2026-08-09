@@ -29,6 +29,22 @@ type Transport interface {
 	PostSigned(ctx context.Context, path string, body []byte) ([]byte, error)
 }
 
+// conditionalGetter is an OPTIONAL Transport capability: a signed GET that reports a 304 Not
+// Modified as an ordinary outcome instead of an error. When the Transport implements it, Poll
+// sends If-None-Match with the last response's hash and a server that recognizes it can answer
+// "nothing changed" with an empty body — which is the steady state, since distributed config
+// changes far less often than it is polled. Transports without it (test stubs, older
+// implementations) fall back to a plain GET and the same content-hash comparison, so behavior is
+// identical, just chattier.
+type conditionalGetter interface {
+	GetSignedConditional(ctx context.Context, path string, headers map[string]string) ([]byte, bool, error)
+}
+
+// headerIfNoneMatch carries the last-seen response hash on a conditional poll. The value is this
+// package's own content hash (hex sha256 of the exact response bytes), not an opaque server
+// token — the server computes the same hash over what it is about to send and compares.
+const headerIfNoneMatch = "If-None-Match"
+
 // Syncer polls a signed endpoint on an interval and invokes OnUpdate only when the raw response
 // content actually changes (sha256 comparison) — a healthy steady-state poll that returns
 // unchanged bytes is silent. It can also report local state back over a second signed endpoint,
@@ -150,8 +166,40 @@ func (s *Syncer) Stop() {
 // Poll does one signed GET and reports whether the content changed since the last call this
 // Syncer made (sha256 of the raw bytes). Exported so a caller wanting manual control — a one-shot
 // check rather than a background loop — never needs Start/Stop at all.
+//
+// When the Transport supports conditional GETs, the last-seen hash goes out as If-None-Match and
+// an unchanged response comes back as a bodiless 304 — so a steady-state poll transfers nothing.
+// A 304 returns (nil, false, nil): no bytes and no change, which is exactly what the caller
+// already handles, since it only acts on changed == true.
 func (s *Syncer) Poll(ctx context.Context) (raw []byte, changed bool, err error) {
-	raw, err = s.transport.GetSigned(ctx, s.pollPath, s.headers())
+	s.mu.Lock()
+	prev := s.lastHash
+	s.mu.Unlock()
+
+	headers := s.headers()
+	if cg, ok := s.transport.(conditionalGetter); ok {
+		if prev != "" {
+			if headers == nil {
+				headers = map[string]string{}
+			}
+			headers[headerIfNoneMatch] = prev
+		}
+		raw, notModified, err := cg.GetSignedConditional(ctx, s.pollPath, headers)
+		if err != nil {
+			return nil, false, err
+		}
+		if notModified {
+			return nil, false, nil
+		}
+		h := contentHash(raw)
+		s.mu.Lock()
+		changed = h != s.lastHash
+		s.lastHash = h
+		s.mu.Unlock()
+		return raw, changed, nil
+	}
+
+	raw, err = s.transport.GetSigned(ctx, s.pollPath, headers)
 	if err != nil {
 		return nil, false, err
 	}
