@@ -55,6 +55,11 @@ type Event struct {
 	// and prism's /check record for the same session. Sourced from CheckRequest.
 	SessionID string
 	RequestID string
+	// EndpointID / InstanceKey attribute this record to the endpoint-agent instance that
+	// produced it — the durable device and the (agent, repository) identity a sensor resolves.
+	// Both empty for a plain agent call; the platform joins on them when present.
+	EndpointID  string
+	InstanceKey string
 	// TraceID / SpanID / ParentSpanID place this record in prism's lifecycle span
 	// tree (W3C ids). Empty ⇒ prism treats it as unparented.
 	TraceID      string

@@ -36,6 +36,11 @@ type LLMCall struct {
 	Model     string
 	Provider  string
 
+	// EndpointID / InstanceKey attribute the call to the endpoint-agent instance that made it.
+	// Optional — a plain agent call leaves them empty and emits exactly as before.
+	EndpointID  string
+	InstanceKey string
+
 	InputTokens      int64 // uncached input, as the provider reports it
 	OutputTokens     int64
 	CacheReadTokens  int64 // prompt-cache hits; frequently orders of magnitude above InputTokens
@@ -65,6 +70,7 @@ func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 	}
 	ev := telemetry.Event{
 		Type: telemetry.EventLLMIO, SessionID: c.SessionID, RequestID: c.RequestID,
+		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey,
 		Model: c.Model, Provider: c.Provider, Operation: "chat",
 		InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 		TotalTokens:      c.InputTokens + c.OutputTokens,
