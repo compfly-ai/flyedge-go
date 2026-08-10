@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/compfly-ai/flyedge-go/edgesync"
 	"github.com/compfly-ai/flyedge-go/enforce"
 	"github.com/compfly-ai/flyedge-go/identity"
 	"github.com/compfly-ai/flyedge-go/simulation"
@@ -123,6 +124,13 @@ type Guard struct {
 	// protection_disabled; onSimChange forwards config-poll changes to it.
 	simEnabled bool
 	simCtl     *simulation.Controller
+
+	// Local controls: in-process detectors evaluated before the server round trip. Swappable at
+	// runtime by the sync channel; see local_controls.go and local_controls_sync.go.
+	local    localEngineHolder
+	lcState  localControlState
+	lcSyncMu sync.Mutex
+	lcSyncer *edgesync.Syncer
 }
 
 // New builds a Guard from cfg (+ options). If a key is configured it builds a Signer; otherwise the
@@ -231,6 +239,17 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 		}
 	}
 
+	// Local controls run before the round trip: an unambiguous local block is both faster and
+	// available offline. It can only ADD a no — an allow here falls through to the server, which
+	// remains authoritative. A local warning is carried into the server's decision rather than
+	// dropped.
+	tr := traceIDs{traceID: traceID, spanID: spanID, parentSpan: parentSpan}
+	localDec, localWarnings, localBlocked := g.evaluateLocal(req)
+	if localBlocked {
+		g.recordLocalBlock(req, localDec, tr)
+		return localDec, &DenyError{Decision: localDec}
+	}
+
 	start := time.Now()
 	dec, cerr := g.enforcer.Check(ctx, req)
 	latencyMS := float64(time.Since(start).Microseconds()) / 1000.0
@@ -278,6 +297,12 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 		result = dec
 	}
 
+	// A local finding that did not block still travelled with this call — surface it alongside the
+	// server's warnings rather than discarding it, or a warn-mode rollout would look silent.
+	if len(localWarnings) > 0 {
+		result.Warnings = append(result.Warnings, localWarnings...)
+	}
+
 	ev.Action = string(result.Action)
 	ev.Reason = result.Reason
 	g.tel.Record(ev)
@@ -310,6 +335,9 @@ func (g *Guard) Close() error {
 	if g.simCtl != nil {
 		g.simCtl.Stop()
 	}
+	// The local-control sync owns a goroutine like the pollers above; leaving it running past
+	// Close would keep a "closed" Guard polling the platform forever.
+	g.StopLocalControlSync()
 	if g.tel != nil {
 		return g.tel.Close()
 	}
