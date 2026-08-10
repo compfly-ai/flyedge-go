@@ -37,6 +37,20 @@ func TestCheckAllow(t *testing.T) {
 	}
 }
 
+func TestCheckMergesEndpointAgentContext(t *testing.T) {
+	recorder := &recordingEnforcer{dec: enforce.Decision{Action: flyedge.ActionAllow}}
+	g := newGuard(t, flyedge.WithEnforcer(recorder))
+	ctx := flyedge.ContextWithEndpointAgent(context.Background(), flyedge.EndpointAgent{
+		InstanceKey: "claude-code\x00/Users/prakash/dev/payments-api",
+	})
+	if _, err := g.Check(ctx, flyedge.CheckRequest{Stage: flyedge.StagePreLLM}); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if recorder.last.EndpointAgent == nil || recorder.last.EndpointAgent.InstanceKey != "claude-code\x00/Users/prakash/dev/payments-api" {
+		t.Fatalf("instance key missing from checked request: %+v", recorder.last.EndpointAgent)
+	}
+}
+
 func TestCheckDenyReturnsDenyError(t *testing.T) {
 	g := newGuard(t, flyedge.WithEnforcer(stubEnforcer{dec: enforce.Decision{Action: flyedge.ActionDeny, Reason: "jailbreak_detected"}}))
 	dec, err := g.Check(context.Background(), flyedge.CheckRequest{Stage: flyedge.StagePreLLM})
