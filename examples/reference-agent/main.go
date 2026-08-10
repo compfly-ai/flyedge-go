@@ -35,10 +35,16 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	flyedge "github.com/compfly-ai/flyedge-go"
+	"github.com/compfly-ai/flyedge-go/localcontrol"
 	feotel "github.com/compfly-ai/flyedge-go/telemetry/otel"
 )
 
 const session = "reference-agent"
+
+// localControlPollInterval is short for a demo so a rule published mid-run is visible within one
+// turn. Production agents should leave the default (5 minutes) — the conditional GET makes an
+// unchanged poll nearly free, but not free enough to justify polling every few seconds.
+const localControlPollInterval = 30 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -63,6 +69,25 @@ func run() error {
 		return fmt.Errorf("build guard: %w", err)
 	}
 	defer guard.Close()
+
+	// 1b. Local controls: pull the org's client-evaluable rule set and keep it current. These
+	//     detectors run in-process, so an obviously-destructive tool call is stopped without a
+	//     gateway round trip — and still stopped if the gateway is unreachable. Local evaluation
+	//     only ever ADDS a deny; the gateway stays authoritative for everything it allows.
+	//     Best-effort: an agent that cannot reach the rule set is still fully governed remotely.
+	if err := guard.SyncLocalControls(
+		flyedge.WithLocalControlInterval(localControlPollInterval),
+		flyedge.WithLocalControlApplyHook(func(cfg localcontrol.Config, err error) {
+			if err != nil {
+				fmt.Printf("  local controls: rejected published rules (%v) — keeping the previous set\n", err)
+				return
+			}
+			fmt.Printf("  local controls: applied revision %d in mode %q (%v)\n",
+				cfg.Version, cfg.Mode, guard.LocalControlDetectors())
+		}),
+	); err != nil {
+		fmt.Printf("  local controls: sync unavailable (%v) — remote enforcement is unaffected\n", err)
+	}
 
 	banner(guard)
 
