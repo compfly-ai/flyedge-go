@@ -31,6 +31,7 @@ type (
 	// Enrichment context types (opt-in fields on CheckRequest).
 	ExecutionContext = enforce.ExecutionContext
 	AuthContext      = enforce.AuthContext
+	EndpointAgent    = enforce.EndpointAgent
 )
 
 const (
@@ -209,6 +210,14 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	}
 	if req.Framework == "" {
 		req.Framework = "flyedge-go" // identify the SDK so prism doesn't fall back to its default
+	}
+	// A sensor sets the endpoint-agent identity per event on the context (repository changes call to
+	// call); merge it onto the request unless the caller supplied one explicitly, so prism can
+	// resolve the exact instance a control may target.
+	if req.EndpointAgent == nil {
+		if ea, ok := enforce.EndpointAgentFromContext(ctx); ok {
+			req.EndpointAgent = &ea
+		}
 	}
 
 	// Trace propagation: give this check its own span under the caller's trace

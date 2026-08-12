@@ -36,6 +36,11 @@ type LLMCall struct {
 	Model     string
 	Provider  string
 
+	// EndpointID / InstanceKey attribute the call to the endpoint-agent instance that made it.
+	// Optional — a plain agent call leaves them empty and emits exactly as before.
+	EndpointID  string
+	InstanceKey string
+
 	InputTokens      int64 // uncached input, as the provider reports it
 	OutputTokens     int64
 	CacheReadTokens  int64 // prompt-cache hits; frequently orders of magnitude above InputTokens
@@ -65,6 +70,7 @@ func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 	}
 	ev := telemetry.Event{
 		Type: telemetry.EventLLMIO, SessionID: c.SessionID, RequestID: c.RequestID,
+		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey,
 		Model: c.Model, Provider: c.Provider, Operation: "chat",
 		InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 		TotalTokens:      c.InputTokens + c.OutputTokens,
@@ -94,16 +100,50 @@ func (g *Guard) emitLLM(sessionID, requestID, model, provider string, inputToken
 	})
 }
 
+// ToolIO carries one observed tool invocation. ArgsJSON/ResultJSON are optional audit payloads;
+// callers that only need usage attribution can leave them empty.
+type ToolIO struct {
+	SessionID string
+	RequestID string
+	ToolName  string
+
+	// EndpointID / InstanceKey attribute the tool call to the endpoint-agent instance that made it.
+	// Optional — a plain agent call leaves them empty and emits exactly as before.
+	EndpointID  string
+	InstanceKey string
+
+	ArgsJSON   string
+	ResultJSON string
+
+	TraceID        string
+	SpanID         string
+	ParentSpanID   string
+	AgentFramework string
+	Data           map[string]any
+}
+
 // RecordToolIO emits a tool_io event (tool name + args/result). argsJSON/resultJSON are
 // carried as the audit request/response payloads.
 func (g *Guard) RecordToolIO(sessionID, requestID, toolName, argsJSON, resultJSON string) {
+	g.RecordToolIODetail(ToolIO{
+		SessionID: sessionID, RequestID: requestID, ToolName: toolName,
+		ArgsJSON: argsJSON, ResultJSON: resultJSON,
+	})
+}
+
+// RecordToolIODetail emits an attributed tool_io event from a full ToolIO.
+func (g *Guard) RecordToolIODetail(c ToolIO) {
 	if g == nil || g.tel == nil {
 		return
 	}
 	g.tel.Record(telemetry.Event{
-		Type: telemetry.EventToolIO, SessionID: sessionID, RequestID: requestID,
-		Name: toolName, Operation: "tool.call",
-		RequestFull: argsJSON, ResponseFull: resultJSON, OccurredAt: time.Now(),
+		Type: telemetry.EventToolIO, SessionID: c.SessionID, RequestID: c.RequestID,
+		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey,
+		TraceID: c.TraceID, SpanID: c.SpanID, ParentSpanID: c.ParentSpanID,
+		Name: c.ToolName, Operation: "tool.call",
+		AgentFramework: c.AgentFramework,
+		RequestFull:    c.ArgsJSON, ResponseFull: c.ResultJSON, Data: c.Data,
+		OccurredAt: time.Now(),
 	})
 }
 
