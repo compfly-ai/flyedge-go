@@ -22,13 +22,31 @@ type signedPoster interface {
 	PostSigned(ctx context.Context, path string, body []byte) ([]byte, error)
 }
 
+// SkillInfo is one Anthropic Agent Skill the agent has available — SKILL.md frontmatter only.
+// Skill bodies and script contents are never shipped: the platform governs which skills exist on
+// an agent, not what they say.
+//
+// This is what makes an edge-pack-distributed skill visible to the platform: the daemon
+// materializes it on disk, the agent declares it here, and drift recognition matches it against
+// the org's published packs (governed) or flags it for review (not from any pack).
+type SkillInfo struct {
+	Name         string   // frontmatter `name` — the identity drift recognition matches on
+	Description  string   // frontmatter `description`
+	AllowedTools []string // frontmatter `allowed-tools`
+	Scripts      []string // filenames under <skill>/scripts/ — names only, never contents
+	Source       string   // "framework" | "config" | "filesystem" — how it was discovered
+	SourcePath   string   // where it was found, e.g. the materialized pack path
+}
+
 // ManifestInfo is what an agent declares about itself at Connect: its framework and the tools/
-// models it uses. The platform uses this for presence + manifest-seeded behavioral baselines.
+// models/skills it uses. The platform uses this for presence + manifest-seeded behavioral
+// baselines.
 type ManifestInfo struct {
-	Framework   string   // e.g. "langchaingo", "anthropic-sdk-go"
-	Tools       []string // tool names the agent can call
-	Models      []string // model ids the agent uses
-	Environment string   // dev|staging|prod
+	Framework   string      // e.g. "langchaingo", "anthropic-sdk-go"
+	Tools       []string    // tool names the agent can call
+	Models      []string    // model ids the agent uses
+	Skills      []SkillInfo // Anthropic Agent Skills available to the agent (frontmatter only)
+	Environment string      // dev|staging|prod
 
 	// Enterprise is an optional enterprise-identity block (provider, tenantId, roles, groups,
 	// scopes, issuer, …). prism stores it on the agent (pass-through) for enterprise governance.
@@ -136,10 +154,22 @@ type frameworkInfo struct {
 type agentCapabilities struct {
 	Tools  []toolCapability  `json:"tools,omitempty"`
 	Models []modelCapability `json:"models,omitempty"`
+	Skills []skillCapability `json:"skills,omitempty"`
 }
 
 type toolCapability struct {
 	Name string `json:"name"`
+}
+
+// skillCapability is the frozen wire shape prism's SkillCapability expects (snake_case). Only
+// declarative metadata crosses the wire — no skill body, no script contents.
+type skillCapability struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description,omitempty"`
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+	Scripts      []string `json:"scripts,omitempty"`
+	Source       string   `json:"source,omitempty"`
+	SourcePath   string   `json:"source_path,omitempty"`
 }
 
 type modelCapability struct {
@@ -162,6 +192,16 @@ func buildManifest(info ManifestInfo) agentManifest {
 	}
 	for _, m := range info.Models {
 		caps.Models = append(caps.Models, modelCapability{Provider: providerFor(m), ModelID: m})
+	}
+	for _, s := range info.Skills {
+		caps.Skills = append(caps.Skills, skillCapability{
+			Name:         s.Name,
+			Description:  s.Description,
+			AllowedTools: s.AllowedTools,
+			Scripts:      s.Scripts,
+			Source:       s.Source,
+			SourcePath:   s.SourcePath,
+		})
 	}
 	m := agentManifest{
 		SDKVersion:   sdkVersion,
