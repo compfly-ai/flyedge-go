@@ -138,6 +138,8 @@ type otelEvent struct {
 	TotalTokens      uint64 `json:"total_tokens,omitempty"`
 	LatencyMS        uint64 `json:"latency_ms,omitempty"`
 	SessionID        string `json:"session_id,omitempty"`
+	EndpointID       string `json:"endpoint_id,omitempty"`
+	InstanceKey      string `json:"instance_key,omitempty"`
 	Timestamp        string `json:"timestamp"`
 	AgentFramework   string `json:"agent_framework,omitempty"`
 	Streaming        *bool  `json:"streaming,omitempty"`
@@ -176,6 +178,8 @@ func toOtelEvents(evs []Event) []otelEvent {
 			TotalTokens:      u64(e.TotalTokens + e.CacheReadTokens + e.CacheWriteTokens),
 			LatencyMS:        uint64(e.LatencyMS),
 			SessionID:        e.SessionID,
+			EndpointID:       e.EndpointID,
+			InstanceKey:      e.InstanceKey,
 			Timestamp:        e.OccurredAt.UTC().Format(time.RFC3339),
 			AgentFramework:   e.AgentFramework,
 			Streaming:        e.Streaming,

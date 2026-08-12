@@ -138,3 +138,26 @@ func TestCheckAttachesIdentityHeaders(t *testing.T) {
 		t.Fatalf("body stage = %q", cr.Stage)
 	}
 }
+
+// A sensor sets the endpoint-agent identity per event; it must round-trip through the context so
+// Check can merge it onto the request and prism can resolve the exact instance.
+func TestEndpointAgentContextRoundTrip(t *testing.T) {
+	ea := EndpointAgent{InstanceKey: "claude-code\x00/Users/prakash/dev/payments-api", EndpointID: "install-7f3a", ProductKey: "claude-code", WorkContext: "/Users/prakash/dev/payments-api"}
+	ctx := ContextWithEndpointAgent(context.Background(), ea)
+	got, ok := EndpointAgentFromContext(ctx)
+	if !ok {
+		t.Fatal("endpoint-agent identity not found on context")
+	}
+	if got != ea {
+		t.Errorf("round-trip mismatch: got %+v want %+v", got, ea)
+	}
+}
+
+// The zero value carries no identity, so it must not be attached — a non-sensor caller leaves the
+// context clean and governance stays at the agent level.
+func TestEndpointAgentContextZeroIgnored(t *testing.T) {
+	ctx := ContextWithEndpointAgent(context.Background(), EndpointAgent{})
+	if _, ok := EndpointAgentFromContext(ctx); ok {
+		t.Error("zero-value EndpointAgent must not be attached to the context")
+	}
+}

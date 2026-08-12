@@ -34,3 +34,9 @@ func ContextWithDelegation(ctx context.Context, token string) context.Context {
 func ContextWithAgentIdentity(ctx context.Context, sid, urn string) context.Context {
 	return enforce.ContextWithAgentIdentity(ctx, sid, urn)
 }
+
+// ContextWithEndpointAgent attaches the exact local endpoint-agent instance observed for a check.
+// The instance key becomes part of the signed request body when Guard.Check runs.
+func ContextWithEndpointAgent(ctx context.Context, agent EndpointAgent) context.Context {
+	return enforce.ContextWithEndpointAgent(ctx, agent)
+}
