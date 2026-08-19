@@ -63,7 +63,18 @@ type CheckRequest struct {
 	OriginType       string            `json:"origin_type,omitempty"`
 	ExecutionContext *ExecutionContext `json:"execution_context,omitempty"`
 	AuthContext      *AuthContext      `json:"auth_context,omitempty"`
+	EndpointAgent    *EndpointAgent    `json:"endpoint_agent,omitempty"`
 	Metadata         map[string]any    `json:"metadata,omitempty"`
+}
+
+// EndpointAgent carries endpoint-agent context observed by a sensor. InstanceKey is the canonical
+// enforcement handle: it is signed in the check body and paired by Prism with the verified sensor
+// DID and the attested product key. The remaining fields are inventory context only.
+type EndpointAgent struct {
+	InstanceKey string `json:"instance_key,omitempty"` // canonical product + workspace-root identity
+	EndpointID  string `json:"endpoint_id,omitempty"`  // durable device id (the sensor install)
+	ProductKey  string `json:"product_key,omitempty"`  // normalized agent, e.g. "claude-code"
+	WorkContext string `json:"work_context,omitempty"` // display/evidence repository context
 }
 
 // ExecutionContext describes how/where the operation runs (prism FlyedgeExecutionContext) —

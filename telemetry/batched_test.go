@@ -135,3 +135,57 @@ func TestWireInputTokensIncludeCache(t *testing.T) {
 		t.Errorf("total_tokens = %d, want %d", e.TotalTokens, want)
 	}
 }
+
+// TestWireCarriesInstanceAttribution pins that endpoint_id / instance_key survive into the wire
+// under their snake_case keys. This is the attribution the platform joins model/token usage to an
+// endpoint-agent instance on; if it does not reach the wire, usage stays anonymous.
+func TestWireCarriesInstanceAttribution(t *testing.T) {
+	got := toOtelEvents([]Event{{
+		Type: EventLLMIO, Model: "claude-opus-4-8",
+		EndpointID:  "install-7f3a",
+		InstanceKey: "claude-code\x00/Users/prakash/dev/payments-api",
+	}})
+	if len(got) != 1 {
+		t.Fatalf("expected 1 wire event, got %d", len(got))
+	}
+	if got[0].EndpointID != "install-7f3a" || got[0].InstanceKey != "claude-code\x00/Users/prakash/dev/payments-api" {
+		t.Errorf("instance attribution not carried into wire event: %+v", got[0])
+	}
+
+	// Confirm the JSON keys are the agreed snake_case names, not the Go field names.
+	raw, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m["endpoint_id"] != "install-7f3a" {
+		t.Errorf("endpoint_id key missing/wrong in wire JSON: %s", raw)
+	}
+	if m["instance_key"] != "claude-code\x00/Users/prakash/dev/payments-api" {
+		t.Errorf("instance_key key missing/wrong in wire JSON: %s", raw)
+	}
+}
+
+// TestWireInstanceAttributionOmittedWhenUnset pins the additive guarantee: a plain agent call that
+// sets neither field emits a wire event with NO endpoint_id / instance_key keys at all, so legacy
+// consumers see byte-for-byte the same shape as before these fields existed.
+func TestWireInstanceAttributionOmittedWhenUnset(t *testing.T) {
+	got := toOtelEvents([]Event{{Type: EventLLMIO, Model: "gpt-4o"}})
+	raw, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := m["endpoint_id"]; ok {
+		t.Errorf("endpoint_id must be omitted when unset: %s", raw)
+	}
+	if _, ok := m["instance_key"]; ok {
+		t.Errorf("instance_key must be omitted when unset: %s", raw)
+	}
+}

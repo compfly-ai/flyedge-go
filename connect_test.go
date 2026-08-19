@@ -53,3 +53,66 @@ func TestBuildManifestEnterprise(t *testing.T) {
 		t.Error("enterprise_token should be omitted when unset")
 	}
 }
+
+// TestBuildManifestSkills verifies Anthropic Agent Skills reach the wire in the snake_case shape
+// prism's SkillCapability expects, and that a skill change DOES move the manifest hash — the
+// opposite of the enterprise block above. Skills are governed content: platform-backend's drift
+// recognition matches a reported skill against the org's published edge packs, so a skill
+// appearing or disappearing has to look like drift, not like pass-through metadata.
+func TestBuildManifestSkills(t *testing.T) {
+	base := ManifestInfo{Framework: "anthropic-sdk-go", Tools: []string{"whoami"}}
+
+	withSkill := base
+	withSkill.Skills = []SkillInfo{{
+		Name:         "pr-conventions",
+		Description:  "CompFly's git/PR workflow norms",
+		AllowedTools: []string{"Bash"},
+		Scripts:      []string{"check.sh"},
+		Source:       "filesystem",
+		SourcePath:   "~/.flyedge/managed-plugins/compfly/x/skills/pr-conventions/SKILL.md",
+	}}
+	m := buildManifest(withSkill)
+
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Capabilities struct {
+			Skills []map[string]any `json:"skills"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Capabilities.Skills) != 1 {
+		t.Fatalf("expected 1 skill on the wire, got %d", len(wire.Capabilities.Skills))
+	}
+	s := wire.Capabilities.Skills[0]
+	if s["name"] != "pr-conventions" {
+		t.Errorf("name = %v", s["name"])
+	}
+	// snake_case is the frozen contract with prism — camelCase would silently drop server-side.
+	if _, ok := s["allowed_tools"]; !ok {
+		t.Error("allowed_tools missing (wrong case would be dropped by prism)")
+	}
+	if _, ok := s["source_path"]; !ok {
+		t.Error("source_path missing")
+	}
+
+	// A skill is drift-relevant: adding one must change the hash.
+	if buildManifest(base).ManifestHash == m.ManifestHash {
+		t.Error("adding a skill must change the manifest hash")
+	}
+
+	// And an agent with no skills must omit the key entirely — absent means "preserve existing"
+	// to the backend, where an empty array would read as "this agent has zero skills".
+	nb, _ := json.Marshal(buildManifest(base))
+	var caps struct {
+		Capabilities map[string]any `json:"capabilities"`
+	}
+	_ = json.Unmarshal(nb, &caps)
+	if _, present := caps.Capabilities["skills"]; present {
+		t.Error("skills key must be omitted when the agent declares none")
+	}
+}

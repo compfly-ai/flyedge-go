@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/compfly-ai/flyedge-go/edgesync"
 	"github.com/compfly-ai/flyedge-go/enforce"
 	"github.com/compfly-ai/flyedge-go/identity"
 	"github.com/compfly-ai/flyedge-go/simulation"
@@ -33,6 +34,7 @@ type (
 	// Enrichment context types (opt-in fields on CheckRequest).
 	ExecutionContext = enforce.ExecutionContext
 	AuthContext      = enforce.AuthContext
+	EndpointAgent    = enforce.EndpointAgent
 )
 
 const (
@@ -126,6 +128,13 @@ type Guard struct {
 	// protection_disabled; onSimChange forwards config-poll changes to it.
 	simEnabled bool
 	simCtl     *simulation.Controller
+
+	// Local controls: in-process detectors evaluated before the server round trip. Swappable at
+	// runtime by the sync channel; see local_controls.go and local_controls_sync.go.
+	local    localEngineHolder
+	lcState  localControlState
+	lcSyncMu sync.Mutex
+	lcSyncer *edgesync.Syncer
 }
 
 // New builds a Guard from cfg (+ options). If a key is configured it builds a Signer; otherwise the
@@ -205,6 +214,14 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	if req.Framework == "" {
 		req.Framework = "flyedge-go" // identify the SDK so prism doesn't fall back to its default
 	}
+	// A sensor sets the endpoint-agent identity per event on the context (repository changes call to
+	// call); merge it onto the request unless the caller supplied one explicitly, so prism can
+	// resolve the exact instance a control may target.
+	if req.EndpointAgent == nil {
+		if ea, ok := enforce.EndpointAgentFromContext(ctx); ok {
+			req.EndpointAgent = &ea
+		}
+	}
 
 	// Trace propagation: give this check its own span under the caller's trace
 	// (ContextWithTrace) or a session-derived trace, so prism nests it in the
@@ -232,6 +249,17 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 			})
 			return dec, nil
 		}
+	}
+
+	// Local controls run before the round trip: an unambiguous local block is both faster and
+	// available offline. It can only ADD a no — an allow here falls through to the server, which
+	// remains authoritative. A local warning is carried into the server's decision rather than
+	// dropped.
+	tr := traceIDs{traceID: traceID, spanID: spanID, parentSpan: parentSpan}
+	localDec, localWarnings, localBlocked := g.evaluateLocal(req)
+	if localBlocked {
+		g.recordLocalBlock(req, localDec, tr)
+		return localDec, &DenyError{Decision: localDec}
 	}
 
 	start := time.Now()
@@ -281,6 +309,12 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 		result = dec
 	}
 
+	// A local finding that did not block still travelled with this call — surface it alongside the
+	// server's warnings rather than discarding it, or a warn-mode rollout would look silent.
+	if len(localWarnings) > 0 {
+		result.Warnings = append(result.Warnings, localWarnings...)
+	}
+
 	ev.Action = string(result.Action)
 	ev.Reason = result.Reason
 	g.tel.Record(ev)
@@ -313,6 +347,9 @@ func (g *Guard) Close() error {
 	if g.simCtl != nil {
 		g.simCtl.Stop()
 	}
+	// The local-control sync owns a goroutine like the pollers above; leaving it running past
+	// Close would keep a "closed" Guard polling the platform forever.
+	g.StopLocalControlSync()
 	if g.tel != nil {
 		return g.tel.Close()
 	}

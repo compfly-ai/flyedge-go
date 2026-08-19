@@ -62,10 +62,11 @@ func (p Principal) encode() string {
 }
 
 type (
-	principalKey   struct{}
-	delegationKey  struct{}
-	agentIDKey     struct{}
-	traceparentKey struct{}
+	principalKey     struct{}
+	delegationKey    struct{}
+	agentIDKey       struct{}
+	traceparentKey   struct{}
+	endpointAgentKey struct{}
 )
 
 // agentIdentity holds the NHI subject id + structured urn set via ContextWithAgentIdentity.
@@ -90,6 +91,24 @@ func ContextWithDelegation(ctx context.Context, token string) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, delegationKey{}, token)
+}
+
+// ContextWithEndpointAgent returns a context carrying the endpoint-agent identity a sensor observes
+// for this operation. Check merges it onto the request's
+// EndpointAgent when the caller didn't set one, so a sensor sets it per event and prism resolves the
+// exact instance. The zero value is ignored.
+func ContextWithEndpointAgent(ctx context.Context, ea EndpointAgent) context.Context {
+	if ea.InstanceKey == "" && ea.EndpointID == "" && ea.ProductKey == "" && ea.WorkContext == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, endpointAgentKey{}, ea)
+}
+
+// EndpointAgentFromContext returns the endpoint-agent identity set via ContextWithEndpointAgent, and
+// whether one was present.
+func EndpointAgentFromContext(ctx context.Context) (EndpointAgent, bool) {
+	ea, ok := ctx.Value(endpointAgentKey{}).(EndpointAgent)
+	return ea, ok
 }
 
 // ContextWithAgentIdentity returns a context carrying the agent's non-human-identity attribution:

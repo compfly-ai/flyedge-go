@@ -165,6 +165,43 @@ func (e *HTTPEnforcer) GetSigned(ctx context.Context, path string, headers map[s
 	return raw, nil
 }
 
+// GetSignedConditional is GetSigned with 304 handling: a Not Modified response comes back as
+// (nil, true, nil) rather than an error. Plain GetSigned treats every non-2xx as a failure, which
+// is right for endpoints where 304 is meaningless — this variant exists for poll endpoints that
+// send If-None-Match and want "nothing changed" as an ordinary outcome, not an error to swallow.
+func (e *HTTPEnforcer) GetSignedConditional(ctx context.Context, path string, headers map[string]string) ([]byte, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+path, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	applyIdentityHeaders(ctx, req)
+	if e.signer != nil {
+		hdrs, err := e.signer.Sign(nil, e.now())
+		if err != nil {
+			return nil, false, fmt.Errorf("enforce: sign: %w", err)
+		}
+		for k, v := range hdrs {
+			req.Header.Set(k, v)
+		}
+	}
+	resp, err := e.hc.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("enforce: call %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotModified {
+		return nil, true, nil
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, false, fmt.Errorf("enforce: %s → %d: %s", path, resp.StatusCode, string(raw))
+	}
+	return raw, false, nil
+}
+
 // PostSigned signs and POSTs body to an arbitrary flyedge path (e.g. /v1/flyedge/connect,
 // /v1/flyedge/telemetry), returning the response bytes. Reuses the same signing as Check so the
 // connect + telemetry lifecycle calls authenticate identically. A non-2xx is an error.
