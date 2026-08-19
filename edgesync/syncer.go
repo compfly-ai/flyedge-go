@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Package edgesync is the generic poll/report rails behind every edge sync channel — edge packs,
 // local controls, and whatever comes after. Before this package, config_poll.go's heartbeat loop
 // was the only precedent, and it is entirely Guard-specific (one hardcoded path, one fixed
