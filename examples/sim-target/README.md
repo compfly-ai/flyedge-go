@@ -9,7 +9,7 @@ telemetry stream the platform correlates.
 eval engine ──POST /v1/chat/completions (turn)──▶ sim-target (Guard-wrapped handler)
                                                      │  Check(pre_llm) … Check(post_llm)
                                                      ▼
-                              RuntimeEvents ──WS──▶ prism ──▶ sim:telemetry:{runId} ──▶ eval-runner
+                              RuntimeEvents ──WS──▶ CompFly platform (Simulation Lab)
 ```
 
 The endpoint is how the engine drives the agent; the telemetry WebSocket is how it sees inside it.
@@ -29,7 +29,7 @@ an eval scores.
 
 1. A reachable gateway (prism) at `COMPFLY_API_URL` (defaults to `https://prism.p.compfly.ai`).
 2. A **registered agent with a DID identity** — see below.
-3. Go 1.26+.
+3. Go 1.23+.
 
 ## First-time setup: register the agent + mint its DID
 

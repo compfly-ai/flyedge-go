@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 CompFly AI
 
-// Command attack-target is a minimal flyedge-governed agent purpose-built to exercise the Phase B2
-// attack injector. When a simulation runs against it in ATTACK mode, two things happen automatically:
+// Command attack-target is a minimal flyedge-governed agent purpose-built to exercise the attack
+// injector. When a simulation runs against it in ATTACK mode, two things happen automatically:
 //
 //   - config_inject: its LLM request is rewritten by the transport wrap to carry an adversarial
 //     system message (only exercised when ANTHROPIC_API_KEY is set — a real model call is made).
@@ -10,9 +10,9 @@
 //     MUTATED by the injector.
 //
 // Each tick (when a run is active) it drives one turn — a tool call via GovernToolResult, and (if a
-// key is present) one governed LLM call — and logs whether injection landed. Drive it by starting an
-// attack-mode sim (extra.attack_injector.mode="attack") and watch sim:telemetry:{runId} for the
-// attack_injected events + the agent's mutated view.
+// key is present) one governed LLM call — and logs whether injection landed. Launch an attack-mode
+// simulation against it from the CompFly Simulation Lab and watch the attack_injected telemetry and
+// the agent's mutated view.
 //
 // Env: COMPFLY_API_URL / COMPFLY_AGENT_DID / COMPFLY_AGENT_PRIVATE_KEY_PATH (govern against prism),
 // COMPFLY_SIM_TELEMETRY_URL (advanced telemetry-WS override, normally unset), ANTHROPIC_API_KEY

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 CompFly AI
 
-// Command sim-target is a flyedge-go agent that an external evaluation engine (agent-eval) can
+// Command sim-target is a flyedge-go agent that the CompFly Simulation Lab evaluation engine can
 // actively DRIVE: it serves an OpenAI-compatible chat endpoint, wrapped by the Guard. Each inbound
 // turn runs the pre_llm / post_llm Check stages, so — while a simulation run is active — the
-// engine's attack turns become the RuntimeEvent telemetry streamed to prism (→ Redis
-// sim:telemetry:{runId} → eval-runner). This is the "instrumented, endpoint-driven" target the
-// simulation engine expects: the endpoint is how the engine feeds scenarios, the telemetry WS is
+// engine's attack turns become the RuntimeEvent telemetry streamed to the CompFly platform. This is
+// the "instrumented, endpoint-driven" target the simulation engine expects: the endpoint is how the
+// engine feeds scenarios, the telemetry WS is
 // how the engine sees the agent's internals.
 //
-// Contract (matches agent-eval's generic `custom` HTTP adapter, no inferred schema):
+// Contract (matches the Simulation Lab's generic `custom` HTTP adapter, no inferred schema):
 //   POST /v1/chat/completions  {"messages":[{"role","content"}...],"session_id":"..."}
 //     → {"choices":[{"message":{"role":"assistant","content":"..."}}]}
 //   GET  /health               → 200

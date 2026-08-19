@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Run the attack-target agent (Terminal 1). Config from the environment or a local .env file next to
-# this script (gitignored). See README.md. Then use drive.sh (Terminal 2) to start an attack-mode sim.
+# Run the attack-target agent. Config from the environment or a local .env file next to
+# this script (gitignored). See README.md. Then launch an attack-mode simulation against it
+# from the CompFly Simulation Lab.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$HERE/.env" ]; then set -a; . "$HERE/.env"; set +a; fi
@@ -25,6 +26,6 @@ export COMPFLY_AGENT_DID COMPFLY_AGENT_PRIVATE_KEY_PATH
 
 echo "→ attack-target starting  (API=$COMPFLY_API_URL  DID=$COMPFLY_AGENT_DID)"
 [ -n "${ANTHROPIC_API_KEY:-}" ] && echo "   ANTHROPIC_API_KEY set → config_inject will be exercised" || echo "   no ANTHROPIC_API_KEY → tool_poison only (config_inject needs a key)"
-echo "   leave running; start an attack sim with ./drive.sh start"
+echo "   leave running; launch an attack-mode simulation from the CompFly Simulation Lab"
 cd "$HERE/.."
 exec go run ./attack-target
