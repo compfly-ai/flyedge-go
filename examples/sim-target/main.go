@@ -15,12 +15,11 @@
 //   GET  /health               → 200
 //
 // Env:
-//   COMPFLY_API_URL                 prism base the agent calls (host: http://localhost:8080)
-//   COMPFLY_AGENT_DID               the agent's DID (MCP/registered)
+//   COMPFLY_API_URL                 prism base the agent calls (defaults to https://prism.p.compfly.ai)
+//   COMPFLY_AGENT_DID               the agent's DID (from registering an agent in the CompFly platform)
 //   COMPFLY_AGENT_PRIVATE_KEY_PATH  Ed25519 PEM
-//   COMPFLY_SIM_TELEMETRY_URL       split-horizon override for the telemetry WS (host runs the
-//                                   agent, but the gateway advertises an in-cluster ws://prism:8080
-//                                   URL the host can't resolve) — set ws://localhost:8080/v1/simulation/telemetry
+//   COMPFLY_SIM_TELEMETRY_URL       advanced override for the telemetry WS URL; normally unset (the
+//                                   gateway is authoritative)
 //   SIM_TARGET_ADDR                 listen address (default :8899)
 package main
 

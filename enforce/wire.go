@@ -3,7 +3,7 @@
 
 // Package enforce is the policy decision-point client: it signs a CheckRequest and POSTs it to
 // prism's /v1/flyedge/check, returning a typed Decision. The JSON shapes here are the frozen wire
-// schema (DESIGN.md §1b) shared with prism/policy-enforcer and the Python/TS SDKs.
+// schema shared with prism/policy-enforcer and the Python/TS SDKs.
 package enforce
 
 import (

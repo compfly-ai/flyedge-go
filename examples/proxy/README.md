@@ -7,12 +7,16 @@ it's an `httputil.ReverseProxy` whose transport is `guard.WrapRoundTripper`.
 
 ## Run the proxy
 ```bash
-COMPFLY_API_URL=http://localhost:8080 \
-COMPFLY_AGENT_DID="$(cat ~/flyedge-local-demo/agent.did)" \
-COMPFLY_AGENT_PRIVATE_KEY_PATH="$HOME/flyedge-local-demo/agent_key.pem" \
+COMPFLY_API_URL=https://prism.p.compfly.ai \
+COMPFLY_AGENT_DID="$COMPFLY_AGENT_DID" \
+COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem \
 FLYEDGE_MODE=enforce \
 go run ./cmd/flyedge-proxy            # listens on :9000
 ```
+
+`COMPFLY_API_URL` points at your CompFly gateway (the SDK defaults to `https://prism.p.compfly.ai`
+when unset). Register an agent and mint its DID + Ed25519 key in the CompFly platform, then set
+`COMPFLY_AGENT_DID` and `COMPFLY_AGENT_PRIVATE_KEY_PATH`.
 
 ## Point an agent at it (no SDK change beyond base URL)
 - **OpenAI SDK:** `option.WithBaseURL("http://localhost:9000/v1")` → `/v1/chat/completions` routes to OpenAI.

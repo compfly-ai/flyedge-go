@@ -8,8 +8,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Load ./.env if present (KEY=value lines). Keeps machine-specific paths out of the script.
 if [ -f "$HERE/.env" ]; then set -a; . "$HERE/.env"; set +a; fi
 
-: "${COMPFLY_API_URL:=http://localhost:8080}"   # prism gateway base
-: "${SIM_TARGET_ADDR:=:8899}"                    # HTTP listen address
+: "${COMPFLY_API_URL:=https://prism.p.compfly.ai}"   # prism gateway base
+: "${SIM_TARGET_ADDR:=:8899}"                        # HTTP listen address
 export COMPFLY_API_URL SIM_TARGET_ADDR
 
 if [ -z "${COMPFLY_AGENT_DID:-}" ] || [ -z "${COMPFLY_AGENT_PRIVATE_KEY_PATH:-}" ]; then
@@ -30,9 +30,7 @@ First-time setup — register the agent and mint its DID identity:
     COMPFLY_AGENT_DID=did:compfly:...
     COMPFLY_AGENT_PRIVATE_KEY_PATH=/absolute/path/to/keys/my-sim-agent.pem
 
-  Local k3d stack shortcut: `AGENT_SLUG=<slug> bash \
-    terraform-compfly/local/scripts/register-host-agent.sh` registers + mints the key
-  into terraform-compfly/local/keys/<slug>.{did,pem} for you. See README.md.
+  See README.md.
 MSG
   exit 1
 fi

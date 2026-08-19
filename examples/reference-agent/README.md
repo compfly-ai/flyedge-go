@@ -1,7 +1,7 @@
 # reference-agent — the Go guard end to end
 
-A complete, runnable Claude tool-use agent governed by the flyedge Go guard against your **local
-Compfly platform**. It's the "see it in practice" demo: watch the guard decide on every model call
+A complete, runnable Claude tool-use agent governed by the flyedge Go guard against your **CompFly
+platform**. It's the "see it in practice" demo: watch the guard decide on every model call
 and every tool call, allow the safe actions, deny the risky one, and let the agent adapt.
 
 The agent has three tools:
@@ -14,38 +14,40 @@ The agent has three tools:
 
 The default task makes Claude use all three. **The tool-call decisions are made server-side by
 prism for the agent identity you run as — not by the SDK.** For an agent whose service-access policy
-restricts egress (e.g. the MCP-minted demo `kyc-risk-agent`,
-`did:compfly:66f100:1fbad81e2c302b7b69b936e44e0f5c9e`), `fetch_url` is **denied**
-(`external_service_denied`) and Claude finishes without the blocked data. For an agent whose policy
-permits egress, `fetch_url` is **allowed** and the agent prints a `note:` saying so — that's the
-platform's real decision, not a bug.
+restricts egress, `fetch_url` is **denied** (`external_service_denied`) and Claude finishes without
+the blocked data. For an agent whose policy permits egress, `fetch_url` is **allowed** and the agent
+prints a `note:` saying so — that's the platform's real decision, not a bug.
 
-**Check the banner's `agent:` line to confirm which identity you're running as.** If it isn't the DID
-above, your shell likely has `COMPFLY_AGENT_DID`/`COMPFLY_AGENT_PRIVATE_KEY_PATH` set and those
-override `run.sh`'s defaults — `unset` them, or run as the demo agent, to see the deny.
+**Check the banner's `agent:` line to confirm which identity you're running as.** To see the deny,
+run as an agent whose policy restricts external egress (configure this in the CompFly platform for
+the agent you register below).
 
 ## Prerequisites
 
 - **prism reachable at `COMPFLY_API_URL`.** This matters: the guard fails **open** by default, so if the
   gateway is unreachable every check errors and is *allowed through unenforced* — the run will look
-  like it "allowed" everything. Port-forward it first:
-  `kubectl port-forward -n compfly-local svc/prism 8080:8080`. `run.sh` preflights `/health` and
-  refuses to run if it's down.
-- An agent identity (DID + Ed25519 key). The demo uses the MCP-minted one at `~/flyedge-local-demo/`.
+  like it "allowed" everything. Set `COMPFLY_API_URL` to your CompFly gateway URL (the SDK defaults
+  to `https://prism.p.compfly.ai` when it's unset); `run.sh` preflights `/health` and refuses to run
+  if the gateway is unreachable.
+- An agent identity (DID + Ed25519 key). Register an agent in the CompFly platform and mint its
+  identity, then set `COMPFLY_AGENT_DID` and `COMPFLY_AGENT_PRIVATE_KEY_PATH` (see below).
 - `ANTHROPIC_API_KEY`.
 
 ## Run
 
 ```bash
+export COMPFLY_AGENT_DID=did:compfly:...
+export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem
+export ANTHROPIC_API_KEY=sk-ant-...
 ./run.sh
 ```
 
 Or explicitly:
 
 ```bash
-COMPFLY_API_URL=http://localhost:8080 \
-COMPFLY_AGENT_DID=$(cat ~/flyedge-local-demo/agent.did) \
-COMPFLY_AGENT_PRIVATE_KEY_PATH=$HOME/flyedge-local-demo/agent_key.pem \
+COMPFLY_API_URL=https://prism.p.compfly.ai \
+COMPFLY_AGENT_DID=$COMPFLY_AGENT_DID \
+COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem \
 ANTHROPIC_API_KEY=sk-ant-... \
 FLYEDGE_MODE=enforce \
 go run ./reference-agent/
@@ -80,8 +82,8 @@ flyedge: 5 checks — 4 allowed, 1 denied, 0 warned, 0 errors
 Look at the protection report. If it shows **errors** (e.g. `0 allowed, 0 denied, 5 errors`), the
 checks never reached prism — the gateway was unreachable and the guard **failed open**, so the
 "allowed" lines are fail-open, not policy approval. The agent flags this inline (`⚠ … failed OPEN`)
-and at the end. Fix it by port-forwarding prism, or run with `FLYEDGE_FAIL_MODE=fail_closed` to
-**block** when the gateway is down instead of allowing.
+and at the end. Fix it by ensuring `COMPFLY_API_URL` points at a reachable gateway, or run with
+`FLYEDGE_FAIL_MODE=fail_closed` to **block** when the gateway is down instead of allowing.
 
 A clean enforced run shows `0 errors` (e.g. `4 allowed, 1 denied, 0 errors`).
 

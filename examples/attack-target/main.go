@@ -15,7 +15,8 @@
 // attack_injected events + the agent's mutated view.
 //
 // Env: COMPFLY_API_URL / COMPFLY_AGENT_DID / COMPFLY_AGENT_PRIVATE_KEY_PATH (govern against prism),
-// COMPFLY_SIM_TELEMETRY_URL (split-horizon override), ANTHROPIC_API_KEY (optional — enables config_inject).
+// COMPFLY_SIM_TELEMETRY_URL (advanced telemetry-WS override, normally unset), ANTHROPIC_API_KEY
+// (optional — enables config_inject).
 package main
 
 import (

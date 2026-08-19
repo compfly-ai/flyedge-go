@@ -15,7 +15,7 @@ import (
 // MetadataTokens is the CheckRequest.Metadata key the token-budget detector reads.
 //
 // It lives in metadata rather than as a CheckRequest field because the request JSON is the frozen
-// wire schema shared with prism and the other SDKs (DESIGN.md §1b); adding a field to feed a
+// wire schema shared with prism and the other SDKs; adding a field to feed a
 // purely local detector would be a wire change for no server-side reader.
 const MetadataTokens = "tokens"
 

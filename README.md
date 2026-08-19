@@ -106,15 +106,6 @@ Runnable programs in [`examples/`](examples/), each with its own README:
 ## Docs
 
 - [`docs/DEVELOPER_GUIDE_GO.md`](docs/DEVELOPER_GUIDE_GO.md) — the full guide
-- [`docs/PYTHON_PARITY.md`](docs/PYTHON_PARITY.md) — feature parity with the Python SDK
-- [`DESIGN.md`](DESIGN.md) — internal design notes: the wire contract, package layout and
-  the reasoning behind the explicit ("gothonic") API
-
-## Related
-
-- `flyedged` — host daemon that governs coding agents via their hooks; consumes this SDK
-- `flyedge-rs` — Rust port, plus the Rust-backed Python bindings
-- `flyedge` — the original Python SDK
 
 ## License
 

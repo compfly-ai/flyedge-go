@@ -27,13 +27,14 @@ an eval scores.
 
 ## Prerequisites
 
-1. A running gateway (prism). Locally: `just local` in `terraform-compfly/local` (k3d + Tilt).
+1. A reachable gateway (prism) at `COMPFLY_API_URL` (defaults to `https://prism.p.compfly.ai`).
 2. A **registered agent with a DID identity** — see below.
 3. Go 1.26+.
 
 ## First-time setup: register the agent + mint its DID
 
-The agent authenticates to the gateway with an Ed25519 DID identity. Get one of two ways:
+The agent authenticates to the gateway with an Ed25519 DID identity. Register an agent and mint its
+identity in the CompFly platform:
 
 ### Via the CompFly MCP (works against any environment)
 
@@ -46,26 +47,17 @@ Ask Claude (or any MCP client with the CompFly server configured):
 
 Then point the runner at them (see Configuration).
 
-### Via the local k3d stack (dev shortcut)
-
-```bash
-AGENT_SLUG=my-sim-agent bash terraform-compfly/local/scripts/register-host-agent.sh
-```
-
-Registers the agent (idempotent), mints/rotates the identity, and writes
-`terraform-compfly/local/keys/my-sim-agent.{did,pem}` — no browser needed.
-
 ## Configuration
 
 Copy `.env.example` → `.env` (gitignored) and fill in, or export the vars directly:
 
 | Var | Meaning | Default |
 |---|---|---|
-| `COMPFLY_API_URL` | prism gateway base | `http://localhost:8080` |
+| `COMPFLY_API_URL` | prism gateway base | `https://prism.p.compfly.ai` |
 | `COMPFLY_AGENT_DID` | the agent's DID | *(required)* |
 | `COMPFLY_AGENT_PRIVATE_KEY_PATH` | Ed25519 PEM path | *(required)* |
 | `SIM_TARGET_ADDR` | HTTP listen address | `:8899` |
-| `COMPFLY_SIM_TELEMETRY_URL` | split-horizon telemetry override (local dev only) | *(unset)* |
+| `COMPFLY_SIM_TELEMETRY_URL` | advanced telemetry-WS override (normally unset) | *(unset)* |
 
 ## Run
 
@@ -83,11 +75,9 @@ the platform UI (Simulation Lab → Run Eval), or the eval API. A red_team run g
 scenarios, POSTs them to the endpoint, and scores the responses while the Guard streams the internal
 telemetry.
 
-## Split-horizon note (local dev)
+## Telemetry WebSocket override (advanced)
 
-If you run the agent on your **host** but the gateway runs **in a cluster**, the gateway may advertise
-an in-cluster telemetry URL (e.g. `ws://prism:8080/...`) your host can't resolve, and the engine
-reaches your endpoint at the host's gateway IP (on k3d/Docker-Desktop, `host.docker.internal` ≈
-`192.168.5.2`). Set `COMPFLY_SIM_TELEMETRY_URL=ws://localhost:8080/v1/simulation/telemetry` so the
-telemetry WebSocket uses your port-forwarded gateway. This override is off by default (the agent is
-server-authoritative); it exists only for this local split-horizon case.
+`COMPFLY_SIM_TELEMETRY_URL` lets you pin the telemetry WebSocket to a specific URL instead of the one
+the gateway advertises. It is off by default (the agent is server-authoritative) and should stay
+unset in normal deployments; it exists only for unusual network setups where the advertised URL isn't
+reachable from where the agent runs.
