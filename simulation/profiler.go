@@ -10,15 +10,15 @@ import (
 	"sync"
 )
 
-// ComponentProfiler (Phase B2, observe mode) builds an agent_profile incrementally from what the
+// ComponentProfiler (observe mode) builds an agent_profile incrementally from what the
 // Guard already reports: the Connect manifest (declared tools/models) plus the RuntimeEvents the
 // controller records (tool invocations, LLM calls + prompt content, retriever/memory observations).
-// It emits the profile as an agent_profile telemetry event so agent-eval can reason about the
-// agent's attack surface and build default attack chains from it (Phase B2 attack mode).
+// It emits the profile as an agent_profile telemetry event so the Simulation Lab can reason about the
+// agent's attack surface and build default attack chains from it (attack mode).
 //
-// Ported from the Python flyedge/simulation/attack_injector.py ComponentProfiler, adapted to Go's
-// explicit model: Go seeds tools from the manifest (it doesn't see per-call tool DEFINITIONS the way
-// the Python middleware reads kwargs["tools"]), and enriches from observed calls at runtime.
+// Ported from the Python SDK's ComponentProfiler, adapted to Go's explicit model: Go seeds tools
+// from the manifest (it doesn't see per-call tool DEFINITIONS the way the Python middleware does),
+// and enriches from observed calls at runtime.
 
 // riskPatterns classify a tool by name/description into a risk level (first match wins, severity order).
 var riskPatterns = []struct {

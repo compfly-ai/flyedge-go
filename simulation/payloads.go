@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// Attack payload templates (Phase B2), ported verbatim from the Python
-// flyedge/simulation/attack_payloads.py. Static templates keyed by strategy × sophistication level;
+// Attack payload templates, ported from the Python SDK. Static templates keyed by strategy ×
+// sophistication level;
 // {placeholder} tokens are filled at injection time from the agent profile. No LLM calls here.
 //
 // Sophistication:

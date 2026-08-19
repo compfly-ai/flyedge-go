@@ -27,8 +27,8 @@ const (
 )
 
 // SimulationConfig is prism's `simulation` block from GET /v1/flyedge/config (frozen wire —
-// matches prism SimulationConfig). Delivered only while a run is active. Phase B's controller reacts
-// to it; Phase A surfaces it via Guard.SimulationConfig / SimulationActive.
+// matches prism SimulationConfig). Delivered only while a run is active. The simulation controller
+// reacts to it, and it is surfaced via Guard.SimulationConfig / SimulationActive.
 type SimulationConfig struct {
 	Active             bool            `json:"active"`
 	RunID              string          `json:"run_id"`

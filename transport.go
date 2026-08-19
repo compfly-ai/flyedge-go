@@ -113,7 +113,7 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	req.ContentLength = int64(len(body))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 
-	// config_inject (Phase B2): while a simulation is active in attack mode, rewrite the LLM request
+	// config_inject: while a simulation is active in attack mode, rewrite the LLM request
 	// to insert an adversarial system message before it is checked + forwarded — the same seam the
 	// wrap already owns for pre_llm, flipped from observe to mutate.
 	if t.guard.simCtl != nil {

@@ -4,15 +4,14 @@
 // Package simulation implements the flyedge-go client for the platform's agent
 // simulation / attack-injection layer. When the config poller reports an active
 // simulation (the `simulation` block of GET /v1/flyedge/config), the Controller
-// streams RuntimeEvents to the run's telemetry WebSocket so the evaluation
-// harness (agent-eval) can observe — and, in attack mode, red-team — the agent.
+// streams RuntimeEvents to the run's telemetry WebSocket so the CompFly
+// Simulation Lab can observe — and, in attack mode, red-team — the agent.
 //
 // It is a subpackage on purpose: the WebSocket dependency lives here only, so the
 // core flyedge package stays stdlib-only. flyedge imports simulation (one-way);
 // simulation never imports flyedge.
 //
-// Behavioral reference: the Python SDK's flyedge/simulation/ (types, ws_transport,
-// config_handler, behavior_monitor). The wire shapes below match it exactly.
+// Behavioral reference: the Python SDK's simulation layer. The wire shapes below match it exactly.
 package simulation
 
 import (
@@ -65,7 +64,7 @@ func (c *Config) HasMiddleware(name string) bool {
 }
 
 // RuntimeEvent is a single runtime event streamed over the telemetry WebSocket.
-// prism republishes it to Redis sim:telemetry:{run_id} for the eval harness.
+// prism republishes it to the platform for the Simulation Lab.
 // JSON matches the Python RuntimeEvent.to_dict (optional fields omitted when empty).
 type RuntimeEvent struct {
 	EventID       string  `json:"event_id"`
@@ -95,7 +94,7 @@ type RuntimeEvent struct {
 	// Behavioral flags (set by the behavior monitor)
 	Flags []string `json:"flags,omitempty"`
 
-	// Injection tracking (set by the attack injector — Phase B2)
+	// Injection tracking (set by the attack injector)
 	InjectionID            string `json:"injection_id,omitempty"`
 	InjectionStrategy      string `json:"injection_strategy,omitempty"`
 	InjectionTarget        string `json:"injection_target,omitempty"`
@@ -103,7 +102,7 @@ type RuntimeEvent struct {
 	InjectionChain         string `json:"injection_chain,omitempty"`
 	InjectionTier          int    `json:"injection_tier,omitempty"`
 
-	// Agent profiling (set by the attack injector in observe mode — Phase B2)
+	// Agent profiling (set by the attack injector in observe mode)
 	AgentProfile map[string]any `json:"agent_profile,omitempty"`
 }
 
