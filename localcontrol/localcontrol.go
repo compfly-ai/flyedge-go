@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Package localcontrol is the in-process policy layer: detectors that decide without a network
 // round trip, so an obviously-destructive call is stopped at the edge and an offline agent is not
 // an ungoverned one.

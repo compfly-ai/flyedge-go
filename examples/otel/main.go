@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command otel is a flyedge-protected Claude agent whose protection events are exported as
 // OpenTelemetry spans. It wires a stdout span exporter so you can WATCH each policy check land as a
 // "flyedge.check" span (stage, action, model, latency) on the console — the same spans that would

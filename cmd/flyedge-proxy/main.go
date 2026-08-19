@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command flyedge-proxy is a standalone signing + policy-enforcing HTTP proxy for LLM traffic.
 // Any-language agent points its LLM base URL at this proxy; the proxy runs a flyedge pre_llm check
 // (via the prism gateway) before forwarding to the real provider, and returns 403 on a policy

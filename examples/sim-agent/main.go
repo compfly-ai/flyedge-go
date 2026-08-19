@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command sim-agent makes a flyedge-go agent a live simulation target (Phase B of the simulation
 // work). It connects to the gateway and runs the config heartbeat poller; when a simulation is
 // started against this agent (a hand-driven PUT /internal/v1/agents/{slug}/simulation, or an

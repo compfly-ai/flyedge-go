@@ -115,3 +115,7 @@ Runnable programs in [`examples/`](examples/), each with its own README:
 - `flyedged` — host daemon that governs coding agents via their hooks; consumes this SDK
 - `flyedge-rs` — Rust port, plus the Rust-backed Python bindings
 - `flyedge` — the original Python SDK
+
+## License
+
+[Apache-2.0](./LICENSE). See [NOTICE](./NOTICE) for attribution.

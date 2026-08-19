@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command agent is a minimal flyedge-protected agent. It builds a flyedge.Guard from the agent's
 // DID identity + the prism gateway, then installs ONE governed http.Client (guard.WrapRoundTripper)
 // into both the Anthropic and OpenAI SDKs — proving a single, provider-agnostic transport wrap

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command sim-target is a flyedge-go agent that an external evaluation engine (agent-eval) can
 // actively DRIVE: it serves an OpenAI-compatible chat endpoint, wrapped by the Guard. Each inbound
 // turn runs the pre_llm / post_llm Check stages, so — while a simulation run is active — the

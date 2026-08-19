@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Package simulation implements the flyedge-go client for the platform's agent
 // simulation / attack-injection layer. When the config poller reports an active
 // simulation (the `simulation` block of GET /v1/flyedge/config), the Controller

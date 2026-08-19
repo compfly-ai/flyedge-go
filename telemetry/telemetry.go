@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Package telemetry defines the flyedge protection-telemetry seam. It is explicit and injectable:
 // the Guard records an Event per policy check into whatever Telemetry you install, and Report()
 // returns a Summary you print if and when you want — the deliberate replacement for the Python

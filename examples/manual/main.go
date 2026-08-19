@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025-2026 CompFly AI
+
 // Command manual shows the most explicit flyedge integration: the caller runs guard.Check itself,
 // inline, right where the policy gate belongs — no transport wrap, no middleware. This is the
 // "nothing hidden" path: the check is a visible line in the agent loop, and the LLM client is a
