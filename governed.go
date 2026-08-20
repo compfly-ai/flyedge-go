@@ -11,11 +11,11 @@ import "context"
 //
 //   - During an active simulation in attack mode, the attack injector may MUTATE the result
 //     (tool_poison merges adversarial fields; error_inject replaces it with a crafted error). The
-//     injection is emitted as telemetry for the eval harness's 4-state outcome correlation.
+//     injection is emitted as telemetry for the platform's outcome correlation.
 //   - The result is always run through the tool_call_response check (enforcement + telemetry). A
 //     policy denial returns a *DenyError — the caller should withhold the result from the model.
 //
-// This is the seam Phase B2 needs for injection and that a production agent needs for response
+// This is the seam the injector needs for injection and that a production agent needs for response
 // redaction: one place where the response content can be transformed, not merely allowed/denied.
 func (g *Guard) GovernToolResult(ctx context.Context, session, toolName, result string) (string, Decision, error) {
 	out := result

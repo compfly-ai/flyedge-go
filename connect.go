@@ -80,7 +80,7 @@ func (g *Guard) Connect(ctx context.Context, info ManifestInfo) error {
 		g.onSimChange = func(sc *SimulationConfig) { g.simCtl.OnConfigChange(g.toSimConfig(sc)) }
 	}
 	// Seed the simulation profiler with the declared surface so observe-mode agent_profile reflects
-	// the manifest tools/models (Phase B2).
+	// the manifest tools/models.
 	if g.simCtl != nil {
 		g.simCtl.SetManifest(info.Tools, info.Models)
 	}

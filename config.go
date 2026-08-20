@@ -62,9 +62,8 @@ type Config struct {
 	Timeout time.Duration
 	// SimTelemetryURL overrides the simulation telemetry WebSocket URL the server advertises in the
 	// config's `simulation` block (COMPFLY_SIM_TELEMETRY_URL). Server-authoritative by default (empty);
-	// set it only for split-horizon local dev, where the agent runs on the host but the gateway hands
-	// back an in-cluster URL (e.g. ws://prism:8080) the host can't resolve — point it at the host's
-	// port-forwarded gateway (e.g. ws://localhost:8080/v1/simulation/telemetry).
+	// set it only as an advanced override when the gateway hands back a telemetry URL the client
+	// cannot resolve, and you need to point it at a reachable address.
 	SimTelemetryURL string
 }
 

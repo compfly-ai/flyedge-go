@@ -4,7 +4,7 @@
 // Package flyedge is a Go agent-protection SDK, wire-compatible with the prism/policy-enforcer
 // gateway. It is deliberately explicit ("gothonic"): construct a *Guard, pass it, and route calls
 // through Guard.Check — no import-time monkeypatching, no ambient singletons, and a policy denial
-// is a typed value (*DenyError), not an exception or a synthesized message. See DESIGN.md.
+// is a typed value (*DenyError), not an exception or a synthesized message.
 package flyedge
 
 import (
@@ -104,7 +104,7 @@ type Guard struct {
 	cloudTelemetry bool          // WithCloudTelemetry: ship events to /v1/flyedge/telemetry
 	telInterval    time.Duration // flush interval for cloud telemetry
 
-	// Config heartbeat poller (Phase A): an owned goroutine started by Connect and stopped by
+	// Config heartbeat poller: an owned goroutine started by Connect and stopped by
 	// Close. It GETs /v1/flyedge/config on an interval to keep model_mode current, honor
 	// manifest-refresh requests, and surface the simulation block. pollMu guards all fields below.
 	pollMu       sync.RWMutex
@@ -123,7 +123,7 @@ type Guard struct {
 	onManifestRefresh func()
 	onSimChange       func(*SimulationConfig) // internal hook; the sim controller attaches here
 
-	// Simulation (Phase B): the controller is built at Connect (unless WithSimulation(false)).
+	// Simulation: the controller is built at Connect (unless WithSimulation(false)).
 	// While a run is active it streams RuntimeEvents over the telemetry WebSocket and drives
 	// protection_disabled; onSimChange forwards config-poll changes to it.
 	simEnabled bool

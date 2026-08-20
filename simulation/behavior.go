@@ -19,8 +19,7 @@ type BehaviorInput struct {
 }
 
 // Behavioral flag detectors — deterministic regex/heuristics, no LLM calls.
-// Ported verbatim from the Python BehaviorMonitorMiddleware so the eval harness's
-// correlator sees identical flags.
+// Ported from the Python SDK so the platform's correlator sees identical flags.
 var (
 	credentialPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?:sk|pk)[-_][a-zA-Z0-9]{20,}`),

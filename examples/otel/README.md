@@ -11,9 +11,9 @@ zero-dependency.
 ## Run
 
 ```bash
-export COMPFLY_API_URL=http://localhost:8080
-export COMPFLY_AGENT_DID=$(cat ~/flyedge-local-demo/agent.did)
-export COMPFLY_AGENT_PRIVATE_KEY_PATH=$HOME/flyedge-local-demo/agent_key.pem
+export COMPFLY_API_URL=https://prism.p.compfly.ai   # your CompFly gateway (defaults to this when unset)
+export COMPFLY_AGENT_DID=did:compfly:...             # from registering an agent in the CompFly platform
+export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem
 export ANTHROPIC_API_KEY=sk-ant-...
 
 go run ./otel/

@@ -17,7 +17,7 @@ const (
 	maxListItems  = 20
 )
 
-// Heartbeat cadence (two-phase): a fast burst so the eval-runner subscriber can't
+// Heartbeat cadence (two-phase): a fast burst so the platform's telemetry subscriber can't
 // miss the first connect, then a slow keepalive for liveness.
 const (
 	hbFastInterval = 5 * time.Second
@@ -48,13 +48,13 @@ type Controller struct {
 	tr           *transport
 	hbStop       chan struct{}
 
-	// Observe-mode profiling (Phase B2). manifest* seed the profiler from Connect; prof is created
+	// Observe-mode profiling. manifest* seed the profiler from Connect; prof is created
 	// per active run; lastProfile throttles agent_profile emissions.
 	manifestTools  []string
 	manifestModels []string
 	prof           *profiler
 	lastProfile    time.Time
-	inj            *injector // attack-mode injector (Phase B2)
+	inj            *injector // attack-mode injector
 }
 
 // New builds a Controller. framework labels emitted events (e.g. "flyedge-go/anthropic").
@@ -86,7 +86,7 @@ func (c *Controller) RunID() string {
 
 // OnConfigChange reacts to the simulation block from the config poll. nil ⇒ no
 // simulation (deactivate if running). A changed run_id restarts; the same run_id
-// hot-swaps config (tier transitions — Phase B2).
+// hot-swaps config (tier transitions).
 func (c *Controller) OnConfigChange(sim *Config) {
 	if sim == nil || !sim.Valid() {
 		c.mu.Lock()
@@ -103,7 +103,7 @@ func (c *Controller) OnConfigChange(sim *Config) {
 		if sim.RunID == c.runID {
 			c.cfg = sim
 			c.mu.Unlock()
-			c.handleUpdate(sim) // same run — tier hot-swap (Phase B2)
+			c.handleUpdate(sim) // same run — tier hot-swap
 			return
 		}
 		c.mu.Unlock()
@@ -138,7 +138,7 @@ func (c *Controller) Stop() {
 	}
 }
 
-// handleUpdate handles same-run config changes — Phase B2 tier transitions hot-swap the attack
+// handleUpdate handles same-run config changes — tier transitions hot-swap the attack
 // injector's chains + reset its injection budget, using the current (enriched) profile.
 func (c *Controller) handleUpdate(sim *Config) {
 	c.mu.Lock()
@@ -259,7 +259,7 @@ func (c *Controller) activate(sim *Config) {
 
 	prof.seedManifest(tools, models)
 
-	// Attack injector (Phase B2): configure from extra.attack_injector + the seeded profile. In
+	// Attack injector: configure from extra.attack_injector + the seeded profile. In
 	// observe mode this is inert; in attack mode it drives config_inject / tool_poison / error_inject.
 	inj := newInjector()
 	inj.configure(attackInjectorRaw(sim.Extra), prof.view())
@@ -326,7 +326,7 @@ func (c *Controller) Record(ev RuntimeEvent, bi BehaviorInput) {
 		tr.send(string(b))
 	}
 
-	// Observe mode (Phase B2): fold the event into the agent_profile and emit it periodically.
+	// Observe mode: fold the event into the agent_profile and emit it periodically.
 	if prof != nil {
 		prof.observe(ev)
 		c.maybeEmitProfile(prof)
@@ -391,7 +391,7 @@ func (c *Controller) startHeartbeat(sim *Config) {
 	}()
 }
 
-// sendHeartbeat streams a single simulation_connected event so the eval harness
+// sendHeartbeat streams a single simulation_connected event so the platform
 // sees the agent is live and which middlewares are active.
 func (c *Controller) sendHeartbeat(sim *Config) {
 	c.mu.Lock()

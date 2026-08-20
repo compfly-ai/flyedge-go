@@ -2,7 +2,7 @@
 // Copyright 2025-2026 CompFly AI
 
 // Command reference-agent is a complete, runnable demonstration of the flyedge Go guard governing a
-// real Claude tool-use agent against the local Compfly platform. It shows, end to end, how the
+// real Claude tool-use agent against your CompFly platform. It shows, end to end, how the
 // guard works in practice:
 //
 //   - Every model call is checked at the pre_llm stage (via the transport wrap) before it leaves.
@@ -15,9 +15,9 @@
 //
 // Run (see README):
 //
-//	COMPFLY_API_URL=http://localhost:8080 \
-//	COMPFLY_AGENT_DID=$(cat ~/flyedge-local-demo/agent.did) \
-//	COMPFLY_AGENT_PRIVATE_KEY_PATH=$HOME/flyedge-local-demo/agent_key.pem \
+//	COMPFLY_API_URL=https://prism.p.compfly.ai \
+//	COMPFLY_AGENT_DID=$COMPFLY_AGENT_DID \
+//	COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem \
 //	ANTHROPIC_API_KEY=sk-ant-... \
 //	go run ./reference-agent/
 package main
@@ -64,7 +64,7 @@ func run() error {
 	telOpt, shutdownTel := setupTelemetry()
 	defer shutdownTel()
 
-	// 1. Build the guard from the agent's DID identity + the local gateway. Explicit, no globals.
+	// 1. Build the guard from the agent's DID identity + the gateway. Explicit, no globals.
 	//    LoadEnv reads FLYEDGE_FAIL_MODE — set fail_closed to BLOCK when the gateway is unreachable
 	//    instead of failing open.
 	guard, err := flyedge.New(flyedge.LoadEnv(), telOpt)
@@ -158,7 +158,7 @@ func run() error {
 	if rep.Errors > 0 {
 		fmt.Printf("\n⚠  %d of %d checks ERRORED — the gateway at %s was unreachable, so the guard\n"+
 			"   failed OPEN and let those actions through UNENFORCED. This is not policy approval.\n"+
-			"   Start/port-forward prism and re-run, or set FLYEDGE_FAIL_MODE=fail_closed to block\n"+
+			"   Point COMPFLY_API_URL at a reachable gateway and re-run, or set FLYEDGE_FAIL_MODE=fail_closed to block\n"+
 			"   instead of allowing when the gateway is down.\n",
 			rep.Errors, rep.Checks, envOr("COMPFLY_API_URL", "(unset)"))
 	}
@@ -193,7 +193,7 @@ func guardedTool(ctx context.Context, guard *flyedge.Guard, tu anthropic.ToolUse
 			// The interesting demo moment is egress being DENIED. If your agent's service-access
 			// policy permits external destinations, prism allows it and you land here — the
 			// platform's real decision for this agent. Run as an agent whose policy restricts egress
-			// (e.g. the demo kyc-risk-agent) to see the deny.
+			// to see the deny.
 			fmt.Printf("    note: this agent's policy PERMITS egress to %s (no external_service deny)\n", dest)
 		}
 	}

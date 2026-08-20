@@ -8,14 +8,14 @@ import (
 	"sync"
 )
 
-// Attack injector (Phase B2, attack mode). Ported from the Python attack_schedule.py /
-// attack_injector.py. Injection is a set of AttackChains, each a sequential list of AttackSteps; on
+// Attack injector (attack mode). Ported from the Python SDK. Injection is a set of AttackChains,
+// each a sequential list of AttackSteps; on
 // a governed component call the injector fires the first chain whose current step matches, mutating
 // the LLM request (config_inject) or a tool result (tool_poison / error_inject). One injection per
-// call; a global max caps a run. Chains come from the eval harness (config) or are built from the
+// call; a global max caps a run. Chains come from the simulation config or are built from the
 // agent_profile. The controller owns the injector and wires it to the Guard's seams.
 
-// injectionMeta is stamped onto the RuntimeEvent so eval-runner's 4-state correlator can attribute
+// injectionMeta is stamped onto the RuntimeEvent so the platform's correlator can attribute
 // downstream behavior to the injection.
 type injectionMeta struct {
 	ID             string

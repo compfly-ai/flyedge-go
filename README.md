@@ -97,24 +97,15 @@ refuses, retries, or takes another path. Kills carry the matching kill switch.
 
 Runnable programs in [`examples/`](examples/), each with its own README:
 
-- `reference-agent` — a governed Claude tool-use agent, end to end against a local platform
+- `reference-agent` — a governed Claude tool-use agent, end to end against your CompFly platform
 - `docs-quickstart` — the snippets from the developer guide, compiled
 - `proxy` — the standalone `flyedge-proxy` binary
-- `langchaingo`, `otel`, `manual`, `tools` — framework, telemetry and low-level wiring
-- `sim-target`, `sim-agent`, `attack-target` — simulation and red-team targets
+- `agent`, `langchaingo`, `otel`, `manual`, `tools` — framework, telemetry and low-level wiring
+- `sim-target`, `attack-target` — Simulation Lab / red-team targets
 
 ## Docs
 
 - [`docs/DEVELOPER_GUIDE_GO.md`](docs/DEVELOPER_GUIDE_GO.md) — the full guide
-- [`docs/PYTHON_PARITY.md`](docs/PYTHON_PARITY.md) — feature parity with the Python SDK
-- [`DESIGN.md`](DESIGN.md) — internal design notes: the wire contract, package layout and
-  the reasoning behind the explicit ("gothonic") API
-
-## Related
-
-- `flyedged` — host daemon that governs coding agents via their hooks; consumes this SDK
-- `flyedge-rs` — Rust port, plus the Rust-backed Python bindings
-- `flyedge` — the original Python SDK
 
 ## License
 

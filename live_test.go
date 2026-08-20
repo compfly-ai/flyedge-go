@@ -15,14 +15,14 @@ import (
 	flyedge "github.com/compfly-ai/flyedge-go"
 )
 
-// TestLiveCheck is the M1 wire-compat checkpoint: build a Guard from a real MCP-minted DID+key and
+// TestLiveCheck is the wire-compat checkpoint: build a Guard from a real DID+key and
 // call prism /v1/flyedge/check. It proves prism ACCEPTS our Go signature (no 401) and returns a
 // decision. Env-gated so it never runs in normal CI.
 //
 //	FLYEDGE_LIVE=1 \
-//	COMPFLY_API_URL=http://localhost:8080 \
-//	COMPFLY_AGENT_DID=did:compfly:66f100:1fbad81e2c302b7b69b936e44e0f5c9e \
-//	COMPFLY_AGENT_PRIVATE_KEY_PATH=$HOME/flyedge-local-demo/agent_key.pem \
+//	COMPFLY_API_URL=https://your-gateway \
+//	COMPFLY_AGENT_DID=did:compfly:... \
+//	COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem \
 //	go test -run TestLiveCheck -v
 func TestLiveCheck(t *testing.T) {
 	if os.Getenv("FLYEDGE_LIVE") == "" {

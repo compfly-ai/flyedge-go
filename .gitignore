@@ -1,0 +1,42 @@
+# Binaries built from cmd/ (and any stray build output)
+/flyedge-proxy
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary built with `go test -c`, and test/coverage output
+*.test
+*.out
+coverage.*
+*.cover
+cover.html
+
+# Profiling output
+*.prof
+*.pprof
+
+# Go workspace files (local, multi-module dev across root/examples/telemetry-otel)
+go.work
+go.work.sum
+
+# Local env & secrets (see examples/*/.env.example)
+.env
+.env.*
+!.env.example
+
+# Agent signing keys / certs
+*.pem
+*.key
+*.p12
+keys/
+
+# Editor / IDE / tooling
+.claude/
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
