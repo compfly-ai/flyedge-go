@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	flyedge "github.com/compfly-ai/flyedge-go"
+	"github.com/compfly-ai/flyedge-go"
 )
 
 // TestLiveCheck is the wire-compat checkpoint: build a Guard from a real DID+key and

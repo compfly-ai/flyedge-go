@@ -12,7 +12,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	flyedge "github.com/compfly-ai/flyedge-go"
+	"github.com/compfly-ai/flyedge-go"
 	feotel "github.com/compfly-ai/flyedge-go/telemetry/otel"
 )
 

@@ -17,7 +17,7 @@ import (
 	"os"
 	"time"
 
-	flyedge "github.com/compfly-ai/flyedge-go"
+	"github.com/compfly-ai/flyedge-go"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
 )
