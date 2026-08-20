@@ -13,7 +13,7 @@
 //   COMPFLY_AGENT_PRIVATE_KEY_PATH  Ed25519 PEM
 //   FLYEDGE_MODE                  enforce|warn (default warn)
 //   GEMINI_API_KEY                required for a real model call
-//   MODEL                         Gemini model id (default gemini-2.5-flash)
+//   MODEL                         Gemini model id (default gemini-3.6-flash)
 //   PROMPT                        the user prompt (default: a benign question)
 package main
 
@@ -45,7 +45,7 @@ func run() error {
 	fmt.Printf("flyedge guard: DID=%s mode=%s\n", guard.DID(), envOr("FLYEDGE_MODE", "warn"))
 
 	prompt := envOr("PROMPT", "What are your store hours?")
-	model := envOr("MODEL", "gemini-2.5-flash")
+	model := envOr("MODEL", "gemini-3.6-flash")
 	fmt.Printf("provider=gemini model=%s prompt=%q\n", model, prompt)
 
 	ctx, cancel := context.WithTimeout(flyedge.ContextWithSession(context.Background(), "gemini-demo"), 60*time.Second)

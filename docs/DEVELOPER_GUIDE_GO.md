@@ -201,7 +201,7 @@ client, err := genai.NewClient(ctx, &genai.ClientConfig{
 })
 if err != nil { /* ... */ }
 
-resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+resp, err := client.Models.GenerateContent(ctx, "gemini-3.6-flash",
     []*genai.Content{genai.NewContentFromText("What's the weather in Paris?", genai.RoleUser)}, nil)
 // Same pre_llm governance and typed denials; gate any returned function calls
 // with guard.CheckToolCall(...) before you execute them.

@@ -18,5 +18,5 @@ export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem
 go run ./examples/gemini
 ```
 
-Env: `GEMINI_API_KEY` (required), `MODEL` (default `gemini-2.5-flash`), `PROMPT`, `FLYEDGE_MODE`
+Env: `GEMINI_API_KEY` (required), `MODEL` (default `gemini-3.6-flash`), `PROMPT`, `FLYEDGE_MODE`
 (`enforce`|`warn`). Same governed transport wrap as the `agent`, `openai`, and `langchaingo` examples.
