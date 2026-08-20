@@ -28,7 +28,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
-	flyedge "github.com/compfly-ai/flyedge-go"
+	"github.com/compfly-ai/flyedge-go"
 	"github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 )

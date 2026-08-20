@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	flyedge "github.com/compfly-ai/flyedge-go"
+	"github.com/compfly-ai/flyedge-go"
 )
 
 // TestLiveConformance drives every path added in the spec-conformance pass (#91-94) against a

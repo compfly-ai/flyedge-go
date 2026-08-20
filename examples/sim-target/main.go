@@ -36,7 +36,7 @@ import (
 	"strings"
 	"time"
 
-	flyedge "github.com/compfly-ai/flyedge-go"
+	"github.com/compfly-ai/flyedge-go"
 )
 
 const model = "claude-sonnet-4-5"

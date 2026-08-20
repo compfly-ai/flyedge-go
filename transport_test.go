@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	flyedge "github.com/compfly-ai/flyedge-go"
+	"github.com/compfly-ai/flyedge-go"
 	"github.com/compfly-ai/flyedge-go/enforce"
 )
 
