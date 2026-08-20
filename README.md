@@ -99,7 +99,6 @@ Runnable programs in [`examples/`](examples/), each with its own README:
 
 - `reference-agent` — a governed Claude tool-use agent, end to end against your CompFly platform
 - `docs-quickstart` — the snippets from the developer guide, compiled
-- `proxy` — the standalone `flyedge-proxy` binary
 - `agent`, `langchaingo`, `otel`, `manual`, `tools` — framework, telemetry and low-level wiring
 - `sim-target`, `attack-target` — Simulation Lab / red-team targets
 

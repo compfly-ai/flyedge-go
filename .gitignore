@@ -1,5 +1,4 @@
 # Binaries built from cmd/ (and any stray build output)
-/flyedge-proxy
 *.exe
 *.exe~
 *.dll
