@@ -637,26 +637,6 @@ completes.
 
 ---
 
-## The Proxy Binary
-
-`cmd/flyedge-proxy` is a **language-agnostic** governance proxy: a local HTTP
-server built on the same `Guard`. Point any agent — in any language — at it by
-setting its model base URL (or `HTTPS_PROXY`) to the proxy, and every model call
-that passes through is governed exactly as the in-process SDK would govern it.
-
-```bash
-go run github.com/compfly-ai/flyedge-go/cmd/flyedge-proxy
-# then point your agent's base URL at the proxy's listen address
-```
-
-Use this when you can't (or don't want to) link the Go SDK into the agent — e.g.
-governing a Python agent, a closed-source tool, or a fleet where you'd rather run
-one governed egress point than instrument each process. The in-process SDK
-(`WrapRoundTripper`) and the proxy are two deployment shapes of the same
-governance engine; use whichever fits how the agent is built.
-
----
-
 ## Complete Example
 
 A self-contained Claude agent with model + tool-call governance, DID identity,
@@ -880,7 +860,6 @@ func AsKillSwitchError(err error) (*KillSwitchError, bool)
 | `flyedge-go/enforce` | The `Enforcer` interface, `Decision`, `KillInfo`, and prism client |
 | `flyedge-go/telemetry` | `Telemetry` interface + `Noop` / `Batched` / `Summary` |
 | `flyedge-go/telemetry/otel` | OpenTelemetry sink (`feotel.New`) |
-| `flyedge-go/cmd/flyedge-proxy` | Language-agnostic governance proxy |
 
 ---
 
