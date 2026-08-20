@@ -5,18 +5,12 @@ agent and the model/tools it uses, and enforces policy on every model call and
 tool call — allow, warn, or deny — while streaming telemetry to the CompFly
 platform.
 
-This guide covers the **Go SDK** (`flyedge-go`). If you're using Python or
-JavaScript, see [`DEVELOPER_GUIDE.md`](./DEVELOPER_GUIDE.md) and
-[`DEVELOPER_GUIDE_JS.md`](./DEVELOPER_GUIDE_JS.md).
+This guide covers the **Go SDK** (`flyedge-go`).
 
 ## A note on the Go SDK's design
 
-The Python and JS SDKs lean on **implicit** instrumentation: import the library
-and it monkeypatches your LLM client, installs a global singleton, and threads
-context through thread-locals. That's ergonomic in those ecosystems.
-
-The Go SDK is deliberately **explicit** ("gothonic"). There is no global
-singleton, no import-time side effects, and no monkeypatching. Instead you:
+The Go SDK is deliberately **explicit** ("gothonic"): no global singleton, no
+import-time side effects, no monkeypatching. Instead you:
 
 1. Construct a `*flyedge.Guard` and hold the handle.
 2. Wrap your HTTP transport with `guard.WrapRoundTripper(...)` so model calls are
@@ -29,14 +23,14 @@ sentinel returns. Fail-open vs fail-closed is an explicit configuration choice,
 not a hidden default. This maps cleanly onto Go's error-as-value model and makes
 the governance boundary visible in your code.
 
-| Python / JS (implicit) | Go (explicit) |
-|---|---|
-| Monkeypatch the LLM client | `guard.WrapRoundTripper(base)` on your `http.Client` |
-| Global singleton | A `*flyedge.Guard` handle you pass around |
-| Thread-local / async context | `context.Context` (`flyedge.ContextWithSession`) |
-| `DENY` raises / sentinel | Typed `Decision` + `*flyedge.DenyError` |
-| Fail-open default (hidden) | Explicit `FailMode` (`fail_open` default) |
-| Daemon threads | Owned goroutines, stopped by `guard.Close()` |
+Concretely, that means:
+
+- `guard.WrapRoundTripper(base)` wraps your `http.Client` — every model call over it is governed.
+- A `*flyedge.Guard` handle you construct and pass around — no global singleton.
+- `context.Context` carries session scope (`flyedge.ContextWithSession`).
+- Denials are a typed `Decision` + `*flyedge.DenyError`, not a raise or sentinel return.
+- `FailMode` is an explicit choice (`fail_open` default), not a hidden default.
+- Background goroutines are owned and stopped by `guard.Close()`.
 
 ---
 
@@ -60,7 +54,6 @@ the governance boundary visible in your code.
 - [Configuration](#configuration)
 - [Environment Variables](#environment-variables)
 - [Graceful Shutdown](#graceful-shutdown)
-- [The Proxy Binary](#the-proxy-binary)
 - [Complete Example](#complete-example)
 - [API Reference](#api-reference)
 
@@ -166,6 +159,54 @@ func main() {
 }
 ```
 
+### OpenAI (tool use)
+
+Same `Guard`, same governed `http.Client` — only the provider client changes.
+Point the OpenAI SDK's `WithHTTPClient` at the wrapped transport:
+
+```go
+import (
+    "github.com/openai/openai-go"
+    openaiopt "github.com/openai/openai-go/option"
+)
+
+hc := &http.Client{Transport: guard.WrapRoundTripper(http.DefaultTransport)}
+client := openai.NewClient(
+    openaiopt.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
+    openaiopt.WithHTTPClient(hc),
+)
+
+resp, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+    Model:    openai.ChatModelGPT4o,
+    Messages: []openai.ChatCompletionMessageParamUnion{openai.UserMessage("What's the weather in Paris?")},
+})
+// pre_llm governance + typed *flyedge.DenyError on err work identically. Gate any
+// tool calls the model returns with guard.CheckToolCall(...) before executing them,
+// exactly as in the Anthropic example above.
+```
+
+### Gemini (tool use)
+
+Google's `genai` client accepts an `*http.Client` via `ClientConfig.HTTPClient`,
+so the same wrap governs it:
+
+```go
+import "google.golang.org/genai"
+
+hc := &http.Client{Transport: guard.WrapRoundTripper(http.DefaultTransport)}
+client, err := genai.NewClient(ctx, &genai.ClientConfig{
+    APIKey:     os.Getenv("GEMINI_API_KEY"),
+    HTTPClient: hc,
+    Backend:    genai.BackendGeminiAPI,
+})
+if err != nil { /* ... */ }
+
+resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+    []*genai.Content{genai.NewContentFromText("What's the weather in Paris?", genai.RoleUser)}, nil)
+// Same pre_llm governance and typed denials; gate any returned function calls
+// with guard.CheckToolCall(...) before you execute them.
+```
+
 ### Any LLM client with a pluggable HTTP client (e.g. langchaingo)
 
 Any client that lets you set the `*http.Client` is governed the same way — wrap
@@ -178,8 +219,10 @@ defer guard.Close()
 
 hc := &http.Client{Transport: guard.WrapRoundTripper(http.DefaultTransport)}
 
-// langchaingo's provider takes an *http.Client via WithHTTPClient.
-llm, err := anthropic.New(anthropic.WithHTTPClient(hc)) // github.com/tmc/langchaingo/llms/anthropic
+// langchaingo's Anthropic provider — github.com/tmc/langchaingo/llms/anthropic,
+// aliased here as lcanthropic to distinguish it from the raw Anthropic SDK —
+// takes an *http.Client via WithHTTPClient.
+llm, err := lcanthropic.New(lcanthropic.WithHTTPClient(hc))
 if err != nil { /* ... */ }
 
 reply, err := llms.GenerateFromSinglePrompt(ctx, llm, "What's the weather in Paris?")
@@ -314,9 +357,9 @@ different action.
 
 ## Selective Protection
 
-If you're coming from the Python or JS SDKs, you'll look for a way to *filter*
-which tools or components are protected (`protect(only=[...])`, per-tool config,
-glob matches). The Go SDK has **no such filter API** — and doesn't need one.
+You might look for a way to *filter* which tools or components are protected (a
+`protect(only=[...])`-style config, per-tool flags, glob matches). The Go SDK has
+**no such filter API** — and doesn't need one.
 
 Protection in Go is applied **per call**, so scoping is simply *which calls you
 guard*. To leave a tool ungoverned, don't wrap it in a `CheckToolCall`; to give a
@@ -436,9 +479,8 @@ guard, err := flyedge.New(cfg, flyedge.WithSigner(signer))
 given event).
 
 Requests to prism are signed with the agent's key, so the platform can verify
-authenticity. In **proxy mode** (`Config.ProxyMode` / the proxy binary), traffic
-is routed *through* the flyedge proxy into the gateway rather than checked
-in-process — see [The Proxy Binary](#the-proxy-binary).
+authenticity. In **proxy mode** (`Config.ProxyMode`), traffic is routed *through*
+the gateway (prism's `/v1/proxy`) rather than checked out-of-band.
 
 ---
 
@@ -750,7 +792,6 @@ More runnable examples live under `flyedge-go/examples/`:
 | `langchaingo` | Governing a `langchaingo` LLM via `WithHTTPClient` |
 | `tools` | Tool-call + tool-response guarding |
 | `otel` | OpenTelemetry span export |
-| `proxy` | Using the language-agnostic proxy binary |
 
 ---
 
@@ -864,5 +905,4 @@ func AsKillSwitchError(err error) (*KillSwitchError, bool)
 ---
 
 For platform concepts (policies, effective controls, the governance data plane)
-that apply across all SDKs, see the Python guide's platform sections and the
-CompFly platform docs.
+that apply across all SDKs, see the CompFly platform docs.
