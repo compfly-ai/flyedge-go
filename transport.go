@@ -348,7 +348,8 @@ func contentText(raw json.RawMessage) string {
 		var b strings.Builder
 		for _, p := range parts {
 			if p.Text != "" {
-				b.WriteString(p.Text + " ")
+				b.WriteString(p.Text)
+				b.WriteByte(' ')
 			}
 		}
 		return strings.TrimSpace(b.String())
