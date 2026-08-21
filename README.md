@@ -1,12 +1,13 @@
 # flyedge-go
 
-Agent-protection SDK for Go. You construct a `Guard`, pass it around, and route your
-agent's model calls and tool calls through it. Policy decisions come from the CompFly
-control plane; the SDK's job is to ask, and to make the answer a value you can handle.
+The Go edge runtime SDK for [CompFly](https://compfly.ai), providing explicit
+governance hooks for AI agents. You construct a `Guard`, pass it through your
+application, and route the model calls and tool operations you want governed through it.
 
-Dependencies are deliberately thin: the core module pulls in exactly one
-(`coder/websocket`, for the simulation telemetry channel). The OpenTelemetry sink is a
-separate module, so the OTel SDK only enters your build if you import it.
+Flyedge integrates your agent with the CompFly control plane: it sends activity for
+policy evaluation, applies returned decisions, and emits telemetry. It is intentionally
+not an autonomous security layer or a replacement for your application's authorization
+controls.
 
 ## Install
 
@@ -14,12 +15,13 @@ separate module, so the OTel SDK only enters your build if you import it.
 go get github.com/compfly-ai/flyedge-go
 ```
 
-Requires Go 1.26+.
+Requires Go 1.23+.
 
 ## Quick start
 
-The minimum useful setup is one governed `http.Client` — every model call over that
-transport is checked before it leaves the process.
+Wrap the HTTP transport used by your model client to govern outbound model requests.
+For tools, call `CheckToolCall` before execution and `CheckToolResponse` before
+returning results to the model.
 
 ```go
 guard, err := flyedge.New(flyedge.LoadEnv())
@@ -52,6 +54,9 @@ Wire in only the ones you need.
 | `tool_call` | a tool the model wants to run | `guard.CheckToolCall(...)` |
 | `tool_response` | a tool's output before it re-enters context | `guard.CheckToolResponse(...)` |
 | `post_llm` | the model's response text | `WithResponseCheck()` or `guard.CheckModelResponse(...)` |
+
+Only operations routed through these integration points are evaluated. Streaming output
+that has already been delivered cannot be retracted.
 
 ## Configuration
 
