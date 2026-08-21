@@ -1,6 +1,6 @@
 # Flyedge Go SDK
 
-**Govern AI agents at the edge—where model requests, tool calls, and data cross
+**Govern AI agents at the edge, where model requests, tool calls, and data cross
 application boundaries.**
 
 Flyedge is the Go edge runtime SDK for [CompFly](https://compfly.ai). It connects
