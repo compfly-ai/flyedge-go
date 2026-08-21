@@ -65,10 +65,10 @@ Concretely, that means:
 go get github.com/compfly-ai/flyedge-go
 ```
 
-The core library is **standard-library-only** — it pulls in no third-party
-dependencies. The optional OpenTelemetry sink
-(`.../flyedge-go/telemetry/otel`) is the only subpackage that requires the OTel
-SDK, and you only compile it in if you import it.
+The core module keeps its dependency surface small: it uses `coder/websocket`
+for the simulation telemetry channel. The optional OpenTelemetry sink lives in
+a separate module (`.../flyedge-go/telemetry/otel`), so the OTel SDK only enters
+your build when you import it.
 
 ```go
 import (
@@ -76,7 +76,7 @@ import (
 )
 ```
 
-Requires a recent Go toolchain (the module targets Go 1.26+).
+Requires Go 1.23+.
 
 ---
 
@@ -262,7 +262,7 @@ call in your code:
 | `pre_llm` | The outgoing model request | `guard.WrapRoundTripper(base)` |
 | `tool_call` | A tool the model wants to run | `guard.CheckToolCall(...)` |
 | `post_llm` | The model's response text | `WrapRoundTripper(base, flyedge.WithResponseCheck())` or `guard.CheckModelResponse(...)` |
-| `tool_response` | A tool's output before it re-enters context | `guard.CheckToolResponse(...)` |
+| `tool_call_response` | A tool's output before it re-enters context | `guard.CheckToolResponse(...)` |
 
 You wire in only the stages you need. The `pre_llm` stage (wrapping the
 transport) is the minimum useful configuration; adding `tool_call` checks is
@@ -276,17 +276,17 @@ A check returns a `Decision` and an `error`:
 dec, err := guard.CheckToolCall(ctx, session, name, args, dest)
 ```
 
-- On **allow** or **warn**: `err == nil`, and `dec.Action` tells you which
-  (`"allow"` or `"warn"`). A warn is advisory — you may proceed, but it's logged
-  and reported.
+- On **allow**: `err == nil` and `dec.Action == "allow"`.
+- On **warn**: the warning is advisory in `ModeWarn` and `ModeAudit`. In
+  `ModeEnforce`, Flyedge upgrades it to a denial and returns `*flyedge.DenyError`.
 - On **deny**: `err` is a `*flyedge.DenyError`. Use `flyedge.AsDenyError(err)` to
   recover it and read `.Reason`.
 - On **kill switch** (the agent has been remotely halted): `err` is a
   `*flyedge.KillSwitchError`; use `flyedge.AsKillSwitchError(err)`.
 
-Server-side **deny always enforces**, regardless of your local `Mode` — a deny
-from the platform stops the action. `Mode` only governs how *locally-detected*
-findings behave (see [Protection Modes](#protection-modes)).
+Server-side **deny always enforces** in every checking mode. `ModeOff` is the
+explicit exception because it skips the check entirely. Local controls have
+their own posture (see [Protection Modes](#protection-modes)).
 
 ---
 
@@ -406,17 +406,19 @@ the same turn.
 Two independent settings control behavior. Keep them straight — they answer
 different questions.
 
-### `Mode` — what to do with a local finding
+### `Mode` — policy-check posture
 
 ```go
-flyedge.ModeEnforce // block on local detections
-flyedge.ModeWarn    // log + report, but allow (DEFAULT)
-flyedge.ModeAudit   // record only, minimal noise
-flyedge.ModeOff     // local detectors disabled
+flyedge.ModeEnforce // block platform warn, deny, and kill decisions
+flyedge.ModeWarn    // warnings advisory; deny and kill decisions block (DEFAULT)
+flyedge.ModeAudit   // warnings advisory; deny and kill decisions still block
+flyedge.ModeOff     // skip platform and local checks (local development)
 ```
 
-`Mode` governs **locally-detected** findings only. A server-side deny always
-enforces regardless of `Mode`.
+`ModeOff` is the only mode that bypasses the policy call. In every other mode,
+a platform denial or kill-switch decision blocks. Local controls use the mode
+in their own `localcontrol.Config`, supplied by CompFly or configured in process.
+They can add a local denial but cannot override one from the control plane.
 
 ### `FailMode` — what to do when the enforcement call itself fails
 
@@ -513,7 +515,9 @@ choice.
 
 ### Built-in sinks
 
-- **Noop** — the default when no telemetry option is given; discards events.
+- **Recorder** — the default; keeps an in-memory protection summary and performs
+  no I/O.
+- **Noop** — discards events when no recording is wanted.
 - **Batched (CompFly cloud)** — buffers events and flushes them to the CompFly
   platform on an interval. Enable with `WithCloudTelemetry`:
 
@@ -528,8 +532,8 @@ choice.
 The `telemetry/otel` subpackage exports each check as a `flyedge.check` span
 (stage, action, model, latency) to **your** observability stack — Datadog,
 Honeycomb, an OTel collector, or stdout for local debugging. Your application
-owns the `TracerProvider` and its shutdown; the core library stays
-zero-dependency.
+owns the `TracerProvider` and its shutdown; the core module stays free of OTel
+dependencies.
 
 ```go
 import (
