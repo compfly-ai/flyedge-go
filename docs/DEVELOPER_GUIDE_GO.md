@@ -72,7 +72,7 @@ SDK, and you only compile it in if you import it.
 
 ```go
 import (
-    flyedge "github.com/compfly-ai/flyedge-go"
+    "github.com/compfly-ai/flyedge-go"
 )
 ```
 
@@ -100,7 +100,7 @@ import (
     "github.com/anthropics/anthropic-sdk-go"
     anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
 
-    flyedge "github.com/compfly-ai/flyedge-go"
+    "github.com/compfly-ai/flyedge-go"
 )
 
 func main() {
@@ -201,7 +201,7 @@ client, err := genai.NewClient(ctx, &genai.ClientConfig{
 })
 if err != nil { /* ... */ }
 
-resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+resp, err := client.Models.GenerateContent(ctx, "gemini-3.6-flash",
     []*genai.Content{genai.NewContentFromText("What's the weather in Paris?", genai.RoleUser)}, nil)
 // Same pre_llm governance and typed denials; gate any returned function calls
 // with guard.CheckToolCall(...) before you execute them.
@@ -533,7 +533,7 @@ zero-dependency.
 
 ```go
 import (
-    flyedge "github.com/compfly-ai/flyedge-go"
+    "github.com/compfly-ai/flyedge-go"
     feotel "github.com/compfly-ai/flyedge-go/telemetry/otel"
     "go.opentelemetry.io/otel"
     "go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -699,7 +699,7 @@ import (
     "github.com/anthropics/anthropic-sdk-go"
     anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
 
-    flyedge "github.com/compfly-ai/flyedge-go"
+    "github.com/compfly-ai/flyedge-go"
 )
 
 func main() {
@@ -786,7 +786,9 @@ More runnable examples live under `flyedge-go/examples/`:
 | Example | Shows |
 |---|---|
 | `docs-quickstart` | This guide's Complete Example, runnable |
-| `agent` | Minimal governed agent |
+| `agent` | Minimal governed agent (one wrap across Anthropic + OpenAI) |
+| `openai` | Minimal governed OpenAI agent (model + tool call) |
+| `gemini` | Minimal governed Gemini agent via `genai` (model + tool call) |
 | `reference-agent` | Full tool-use loop with DID + deny-on-egress |
 | `manual` | Direct `Check` / `CheckToolCall` calls without a client |
 | `langchaingo` | Governing a `langchaingo` LLM via `WithHTTPClient` |
