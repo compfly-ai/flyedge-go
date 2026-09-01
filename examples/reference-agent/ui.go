@@ -35,8 +35,8 @@ func banner(g *flyedge.Guard, p provider, u *user) {
 		bold, cyan, reset, dim, u.Name, u.Email, u.Plan, reset)
 	if did := g.DID(); did != "" {
 		fmt.Printf("%sgoverned by flyedge — DID %s · gateway %s · mode %s · model %s (%s)%s\n",
-			dim, did, envOr("COMPFLY_API_URL", "(unset)"), envOr("FLYEDGE_MODE", "warn"),
-			p.Model(), p.Name(), reset)
+			dim, did, envOr("COMPFLY_API_URL", "https://prism.p.compfly.ai"),
+			envOr("FLYEDGE_MODE", "enforce"), p.Model(), p.Name(), reset)
 	} else {
 		fmt.Printf("%sflyedge unsigned (no DID) — checks fail-open locally · model %s (%s)%s\n",
 			dim, p.Model(), p.Name(), reset)

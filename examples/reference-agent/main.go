@@ -35,10 +35,10 @@
 // Run (see README.md for the full walkthrough):
 //
 //	export ANTHROPIC_API_KEY=...  # and/or OPENAI_API_KEY / GEMINI_API_KEY
-//	export COMPFLY_API_URL=http://localhost:8080    # prism gateway (or https://prism.p.compfly.ai)
+//	export COMPFLY_API_URL=https://prism.p.compfly.ai   # the SDK default when unset
 //	export COMPFLY_AGENT_DID=did:compfly:...
 //	export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem
-//	export FLYEDGE_MODE=enforce                     # enforce|warn (default warn)
+//	export FLYEDGE_MODE=enforce                     # optional; this example defaults to enforce
 //	go run ./reference-agent/                       # interactive chat (prompts provider + model)
 //	go run ./reference-agent/ -user bob -input "send $40 to dana@example.com"
 //	go run ./reference-agent/ -serve                # OpenAI-compatible endpoint on :8900
@@ -106,7 +106,14 @@ func run() error {
 
 	// 1. The guard: identity + gateway from env, a heartbeat so platform-driven mode flips
 	//    (check ↔ passthrough ↔ gateway) reach the agent quickly, and a handler to surface them.
-	guard, err := flyedge.New(flyedge.LoadEnv(),
+	//    The SDK's own default posture is warn (advisory warnings don't block, easing first
+	//    integration); this example exists to show enforcement, so it defaults to enforce —
+	//    FLYEDGE_MODE in the environment still wins.
+	cfg := flyedge.LoadEnv()
+	if os.Getenv("FLYEDGE_MODE") == "" {
+		cfg.Mode = flyedge.ModeEnforce
+	}
+	guard, err := flyedge.New(cfg,
 		flyedge.WithHeartbeat(15*time.Second),
 		flyedge.WithModeChangeHandler(func(old, cur flyedge.ModelMode) {
 			gov(cyan, "⚙  model mode changed: %s → %s", old, cur)
@@ -171,7 +178,7 @@ func run() error {
 	//    as an ungoverned/observe agent.
 	if err := guard.Connect(ctx, flyedge.ManifestInfo{
 		Framework:   "reference-agent",
-		Environment: "dev",
+		Environment: envOr("COMPFLY_ENVIRONMENT", "prod"),
 		Models:      []string{a.provider.Model()},
 		Tools:       toolNames(),
 	}); err != nil {

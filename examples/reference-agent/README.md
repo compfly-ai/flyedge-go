@@ -35,12 +35,17 @@ real agent runs in:
 Register an agent in CompFly and mint its identity, then:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...            # and/or OPENAI_API_KEY / GEMINI_API_KEY
-export COMPFLY_API_URL=http://localhost:8080    # or https://prism.p.compfly.ai
+export ANTHROPIC_API_KEY=sk-ant-...             # and/or OPENAI_API_KEY / GEMINI_API_KEY
+export COMPFLY_API_URL=https://prism.p.compfly.ai   # the SDK default when unset
 export COMPFLY_AGENT_DID=did:compfly:...
 export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem
-export FLYEDGE_MODE=enforce                     # enforce|warn (default warn)
 ```
+
+The SDK's own default posture is `warn` (advisory warnings don't block, easing a first
+integration), but this example exists to show enforcement, so it defaults to
+`FLYEDGE_MODE=enforce` — set `FLYEDGE_MODE=warn` in the environment to override. A
+server-side deny or kill switch blocks in **every** mode; the setting only decides
+whether advisory warnings block too.
 
 Without `COMPFLY_*` set the agent still runs: checks fail open (recorded, not
 enforced) and Connect/local-control sync report themselves unavailable — the same
