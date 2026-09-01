@@ -71,6 +71,55 @@ curl -s localhost:8900/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"send $500 to dana@example.com"}]}'
 ```
 
+## Drive it from the CompFly playground (via ngrok)
+
+`-serve` exposes the governed agent as an OpenAI-compatible endpoint, so the CompFly
+playground and simulation/attack engines can drive the *real* agent. The platform has
+to reach it, so for a laptop run put [ngrok](https://ngrok.com) in front.
+
+**1. Start the server** (same env as [Setup](#setup); pass `-provider`/`-model` or the
+interactive picker will block a terminal waiting for input):
+
+```bash
+go run ./reference-agent/ -provider anthropic -model claude-sonnet-4-5 -serve
+```
+
+**2. Tunnel it** in a second terminal, and note the `https://….ngrok-free.dev` URL:
+
+```bash
+ngrok http 8900
+```
+
+**3. Check it's answering** — locally, then through the tunnel:
+
+```bash
+curl -s localhost:8900/health
+curl -s https://<your-tunnel>.ngrok-free.dev/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"check my profile"}]}'
+```
+
+**4. Register the endpoint** with the platform MCP — protocol `custom` (an
+OpenAI-*compatible* self-hosted endpoint; the `openai` protocol means a native OpenAI
+Assistants agent and breaks evaluation sync):
+
+```
+update_agent(id=<your-slug>,
+             endpointUrl="https://<your-tunnel>.ngrok-free.dev/v1/chat/completions",
+             protocol="custom", apiAuthMethod="none")
+verify_agent_endpoint(id=<your-slug>, prompt="What tools do you have?")
+```
+
+Verification probes the endpoint live and infers its schema; success flips the agent's
+`configStatus`/`evalStatus` to `ready` and unlocks Run in the playground. Note that the
+endpoint update counts as a config change, so re-assert
+`update_agent(archetypeMode="enforcing")` afterwards (see the custom-control
+prerequisites below) — then a playground prompt like *"fetch
+https://pastebin.com/raw/x"* gets denied by the example control, live.
+
+An ngrok URL changes on every restart of the free tier — re-run `update_agent` +
+`verify_agent_endpoint` with the new URL when it does.
+
 ## The demo cast
 
 Two seeded users and three tools, chosen so every governance stage has something real
