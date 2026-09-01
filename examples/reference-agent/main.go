@@ -1,38 +1,68 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 CompFly AI
 
-// Command reference-agent is a complete, runnable demonstration of the flyedge Go guard governing a
-// real Claude tool-use agent against your CompFly platform. It shows, end to end, how the
-// guard works in practice:
+// Command reference-agent is the complete flyedge-go integration surface in one runnable
+// service — the shape of a production governed agent, distilled from CompFly's internal reference
+// agent (a governed multi-tool concierge) with its extra protocol layers stripped away. It wires
+// EVERYTHING the SDK offers, in the three shapes a real agent runs in: an interactive chat REPL, a
+// scripted one-off (-input), and an OpenAI-compatible HTTP endpoint (-serve) the CompFly playground
+// and simulation engine can drive.
 //
-//   - Every model call is checked at the pre_llm stage (via the transport wrap) before it leaves.
-//   - Every tool call the model wants to make is checked at the tool_call stage BEFORE it runs, so
-//     policy can allow a safe action (look up an order, check the weather) and DENY a risky one
-//     (egress to an external URL). When a tool is denied, the denial is fed back to the model and it
-//     adapts — the agent keeps going, it doesn't crash.
-//   - The run ends with the protection report. Set OTEL=1 to also export each decision as an
-//     OpenTelemetry span to stdout.
+// The full integration surface:
 //
-// Run (see README):
+//   - Guard construction from env (flyedge.LoadEnv) — explicit, no globals.
+//   - Connect: publish the agent manifest (framework, models, tools) and start the config
+//     heartbeat, so the platform sees the agent online and can flip its model mode at runtime
+//     (surfaced via WithModeChangeHandler).
+//   - Local controls: SyncLocalControls pulls the org's client-evaluable rule set and keeps it
+//     current — in-process denials that still work when the gateway is unreachable. Local
+//     evaluation only ever ADDS a deny; the gateway stays authoritative for what it allows.
+//   - pre_llm + post_llm: ONE governed http.Client (WrapRoundTripper + WithResponseCheck)
+//     installed into every model SDK — the same wrap governs both providers here.
+//   - tool_call: CheckToolCall gates every tool BEFORE it executes. Denials and kill switches are
+//     typed errors, fed back to the model as tool results so the agent adapts instead of crashing.
+//   - tool_call_response: GovernToolResult governs a tool's output before it re-enters the model's
+//     context — the redaction/injection seam.
+//   - On-behalf-of identity: ContextWithPrincipal attributes every governed call in a turn (model
+//     round-trips AND tool checks) to the end user the agent is acting for, so one agent identity
+//     is governed per-user — a policy can key on obo.scope.plan ("free → deny payments"). The HTTP
+//     endpoint selects the principal per request from the X-CompFly-On-Behalf-Of header.
+//   - Sessions: ContextWithSession ties a turn's model calls and tool checks together.
+//   - A provider/model picker: multi-provider (Anthropic | OpenAI | Gemini) behind one
+//     provider-neutral tool loop, with a live model menu fetched from the chosen provider.
+//   - The protection report at exit.
 //
-//	COMPFLY_API_URL=https://prism.p.compfly.ai \
-//	COMPFLY_AGENT_DID=$COMPFLY_AGENT_DID \
-//	COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem \
-//	ANTHROPIC_API_KEY=sk-ant-... \
-//	go run ./reference-agent/
+// Run (see README.md for the full walkthrough):
+//
+//	export ANTHROPIC_API_KEY=...  # and/or OPENAI_API_KEY / GEMINI_API_KEY
+//	export COMPFLY_API_URL=http://localhost:8080    # prism gateway (or https://prism.p.compfly.ai)
+//	export COMPFLY_AGENT_DID=did:compfly:...
+//	export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem
+//	export FLYEDGE_MODE=enforce                     # enforce|warn (default warn)
+//	go run ./reference-agent/                       # interactive chat (prompts provider + model)
+//	go run ./reference-agent/ -user bob -input "send $40 to dana@example.com"
+//	go run ./reference-agent/ -serve                # OpenAI-compatible endpoint on :8900
+//
+// OTEL=1 additionally exports each guard decision as a flyedge.check OpenTelemetry span to stdout.
+//
+// Without COMPFLY_* set the agent still runs: checks fail open (recorded, not enforced) and
+// Connect/local-control sync report themselves unavailable — the same graceful degradation a
+// production agent needs.
 package main
 
 import (
+	"bufio"
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
+	"flag"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
-	anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -42,10 +72,8 @@ import (
 	feotel "github.com/compfly-ai/flyedge-go/telemetry/otel"
 )
 
-const session = "reference-agent"
-
-// localControlPollInterval is short for a demo so a rule published mid-run is visible within one
-// turn. Production agents should leave the default (5 minutes) — the conditional GET makes an
+// localControlPollInterval is short for a demo so a rule published mid-run converges within a turn
+// or two. Production agents should leave the SDK default (5 minutes) — the conditional GET makes an
 // unchanged poll nearly free, but not free enough to justify polling every few seconds.
 const localControlPollInterval = 30 * time.Second
 
@@ -57,224 +85,127 @@ func main() {
 }
 
 func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
+	userID := flag.String("user", "alice", "which seeded user to act on behalf of (alice|bob)")
+	providerName := flag.String("provider", envOr("LLM_PROVIDER", ""), "llm provider: anthropic|openai|gemini (default: auto-detect from the key that is set)")
+	model := flag.String("model", envOr("MODEL", ""), "model id (default: the provider's default)")
+	input := flag.String("input", "", "run a single message and exit (no REPL)")
+	serve := flag.Bool("serve", false, "run the OpenAI-compatible HTTP endpoint instead of the CLI")
+	addr := flag.String("addr", envOr("AGENT_ADDR", ":8900"), "listen address for -serve")
+	flag.Parse()
+
+	u, ok := users[*userID]
+	if !ok {
+		return fmt.Errorf("unknown user %q (try: alice, bob)", *userID)
+	}
+
+	ctx := context.Background()
 
 	// Optional: export guard decisions as OpenTelemetry spans to stdout (OTEL=1).
 	telOpt, shutdownTel := setupTelemetry()
 	defer shutdownTel()
 
-	// 1. Build the guard from the agent's DID identity + the gateway. Explicit, no globals.
-	//    LoadEnv reads FLYEDGE_FAIL_MODE — set fail_closed to BLOCK when the gateway is unreachable
-	//    instead of failing open.
-	guard, err := flyedge.New(flyedge.LoadEnv(), telOpt)
+	// 1. The guard: identity + gateway from env, a heartbeat so platform-driven mode flips
+	//    (check ↔ passthrough ↔ gateway) reach the agent quickly, and a handler to surface them.
+	guard, err := flyedge.New(flyedge.LoadEnv(),
+		flyedge.WithHeartbeat(15*time.Second),
+		flyedge.WithModeChangeHandler(func(old, cur flyedge.ModelMode) {
+			gov(cyan, "⚙  model mode changed: %s → %s", old, cur)
+		}),
+		telOpt,
+	)
 	if err != nil {
 		return fmt.Errorf("build guard: %w", err)
 	}
 	defer guard.Close()
 
-	// 1b. Local controls: pull the org's client-evaluable rule set and keep it current. These
-	//     detectors run in-process, so an obviously-destructive tool call is stopped without a
-	//     gateway round trip — and still stopped if the gateway is unreachable. Local evaluation
-	//     only ever ADDS a deny; the gateway stays authoritative for everything it allows.
-	//     Best-effort: an agent that cannot reach the rule set is still fully governed remotely.
+	// 2. Local controls: keep the org's in-process rule set current. Best-effort — an agent that
+	//    cannot start the sync channel is still governed remotely, so log and continue.
 	if err := guard.SyncLocalControls(
 		flyedge.WithLocalControlInterval(localControlPollInterval),
 		flyedge.WithLocalControlApplyHook(func(cfg localcontrol.Config, err error) {
 			if err != nil {
-				fmt.Printf("  local controls: rejected published rules (%v) — keeping the previous set\n", err)
+				gov(yellow, "⚙  local controls: rejected published rules (%v) — keeping previous set", err)
 				return
 			}
-			fmt.Printf("  local controls: applied revision %d in mode %q (%v)\n",
+			gov(cyan, "⚙  local controls: revision %d mode=%s detectors=%v",
 				cfg.Version, cfg.Mode, guard.LocalControlDetectors())
 		}),
 	); err != nil {
-		fmt.Printf("  local controls: sync unavailable (%v) — remote enforcement is unaffected\n", err)
+		gov(yellow, "⚙  local controls: sync unavailable (%v) — remote enforcement unaffected", err)
 	}
 
-	banner(guard)
+	// 3. ONE governed HTTP client shared by every model SDK: pre_llm on the way out, post_llm
+	//    (WithResponseCheck) on the way back.
+	hc := &http.Client{Transport: guard.WrapRoundTripper(http.DefaultTransport, flyedge.WithResponseCheck())}
 
-	// 2. One governed HTTP client into the Anthropic SDK. The pre_llm check runs before every call.
-	hc := &http.Client{Transport: guard.WrapRoundTripper(http.DefaultTransport)}
-	client := anthropic.NewClient(
-		anthropicopt.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")),
-		anthropicopt.WithHTTPClient(hc),
-	)
-
-	task := envOr("PROMPT", "A customer with order A1023, based in Paris, is asking about their "+
-		"delivery. Look up their order status and the local weather, then fetch the latest shipping "+
-		"updates from https://tracking.example.com/orders/A1023 and give them a short summary.")
-	fmt.Printf("TASK: %s\n\n", task)
-
-	msgs := []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(task))}
-
-	for turn := 1; turn <= 6; turn++ {
-		fmt.Printf("── turn %d ──────────────────────────────────────────\n", turn)
-		errsBefore := guard.Report().Errors
-		msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-			Model:     anthropic.ModelClaudeHaiku4_5,
-			MaxTokens: 640,
-			Tools:     toolDefs(),
-			Messages:  msgs,
-		})
-		if err != nil {
-			// A pre_llm denial arrives here as a *DenyError (the provider was never called).
-			if de, ok := flyedge.AsDenyError(err); ok {
-				fmt.Printf("  🛡  pre_llm DENIED: %s — model call blocked\n", de.Decision.Reason)
-				break
-			}
-			return err
+	// Provider/model picker: prompt only for whatever wasn't explicitly flagged, and only when
+	// stdin is interactive — a piped -input run or a container launch is never blocked on a menu.
+	explicitProvider, explicitModel := false, false
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "provider":
+			explicitProvider = true
+		case "model":
+			explicitModel = true
 		}
-		// The pre_llm check runs inside the transport wrap; if it errored the guard failed open
-		// (default) and let the call through unenforced — surface that instead of a false "allowed".
-		if guard.Report().Errors > errsBefore {
-			fmt.Printf("  ⚠  pre_llm UNREACHABLE — failed OPEN, call NOT enforced\n")
-		} else {
-			fmt.Printf("  🛡  pre_llm allowed\n")
-		}
-		msgs = append(msgs, msg.ToParam())
+	})
+	if *input == "" && isInteractive() && (!explicitProvider || !explicitModel) {
+		*providerName, *model = pickProviderAndModel(ctx, hc, *providerName, explicitProvider, explicitModel)
+	}
 
-		var results []anthropic.ContentBlockParamUnion
-		for _, block := range msg.Content {
-			switch block.Type {
-			case "text":
-				if block.Text != "" {
-					fmt.Printf("  claude: %s\n", block.Text)
-				}
-			case "tool_use":
-				results = append(results, guardedTool(ctx, guard, block.AsToolUse()))
-			}
-		}
-		if len(results) == 0 {
-			fmt.Println("\n✓ agent finished.")
-			break
-		}
-		msgs = append(msgs, anthropic.NewUserMessage(results...))
+	a, err := newAgent(guard, hc, *providerName, *model)
+	if err != nil {
+		return err
+	}
+
+	// Fail fast on a bad key or retired model — one cheap metadata call, before serving traffic.
+	fmt.Fprintf(os.Stderr, "validating %s / %s ... ", a.provider.Name(), a.provider.Model())
+	if err := a.provider.Validate(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "FAILED")
+		return fmt.Errorf("%s key or model %q doesn't work: %w", a.provider.Name(), a.provider.Model(), err)
+	}
+	fmt.Fprintln(os.Stderr, "ok")
+
+	// 4. Connect: publish the manifest (now that the real model + tools are known) and start
+	//    presence/config polling. Best-effort — a local run without a reachable gateway still works
+	//    as an ungoverned/observe agent.
+	if err := guard.Connect(ctx, flyedge.ManifestInfo{
+		Framework:   "reference-agent",
+		Environment: "dev",
+		Models:      []string{a.provider.Model()},
+		Tools:       toolNames(),
+	}); err != nil {
+		gov(yellow, "⚙  Connect failed (%v) — running with fail-open checks", err)
+	}
+
+	fmt.Println()
+	banner(guard, a.provider, u)
+	fmt.Println()
+
+	switch {
+	case *serve:
+		err = serveHTTP(ctx, a, u, *addr)
+	case *input != "":
+		err = runOnce(ctx, a, u, *input)
+	default:
+		err = chatLoop(ctx, a, u)
+	}
+	if err != nil {
+		return err
 	}
 
 	fmt.Println("\n── protection report ───────────────────────────────")
 	rep := guard.Report()
 	fmt.Println(rep)
 	if rep.Errors > 0 {
-		fmt.Printf("\n⚠  %d of %d checks ERRORED — the gateway at %s was unreachable, so the guard\n"+
+		fmt.Printf("\n%s⚠  %d of %d checks ERRORED — the gateway at %s was unreachable, so the guard\n"+
 			"   failed OPEN and let those actions through UNENFORCED. This is not policy approval.\n"+
-			"   Point COMPFLY_API_URL at a reachable gateway and re-run, or set FLYEDGE_FAIL_MODE=fail_closed to block\n"+
-			"   instead of allowing when the gateway is down.\n",
-			rep.Errors, rep.Checks, envOr("COMPFLY_API_URL", "(unset)"))
-	}
-	if os.Getenv("OTEL") != "" {
-		fmt.Println("\n── flyedge.check spans (exported on shutdown) ──────")
+			"   Point COMPFLY_API_URL at a reachable gateway and re-run, or set FLYEDGE_FAIL_MODE=fail_closed\n"+
+			"   to block instead of allowing when the gateway is down.%s\n",
+			yellow, rep.Errors, rep.Checks, envOr("COMPFLY_API_URL", "(unset)"), reset)
 	}
 	return nil
 }
-
-// guardedTool runs the tool_call-stage check BEFORE executing a tool. On ALLOW it performs the tool;
-// on DENY it returns the denial to the model as an error tool_result so the agent can adapt.
-func guardedTool(ctx context.Context, guard *flyedge.Guard, tu anthropic.ToolUseBlock) anthropic.ContentBlockParamUnion {
-	dest := destOf(tu)
-	fmt.Printf("  → tool_call: %s%s\n", tu.Name, argSummary(tu))
-
-	dec, err := guard.CheckToolCall(ctx, session, tu.Name, string(tu.Input), dest)
-	if err != nil {
-		if de, ok := flyedge.AsDenyError(err); ok {
-			fmt.Printf("    🛡  DENIED: %s — not executed\n", de.Decision.Reason)
-			return anthropic.NewToolResultBlock(tu.ID, "blocked by security policy: "+de.Decision.Reason, true)
-		}
-		fmt.Printf("    🛡  check error: %v\n", err)
-		return anthropic.NewToolResultBlock(tu.ID, "policy check error: "+err.Error(), true)
-	}
-	// Distinguish a real policy allow from a fail-OPEN allow (gateway unreachable / errored). The
-	// latter is NOT enforcement — a security tool must never hide it behind a green "allowed".
-	if dec.Reason == "fail_open" {
-		fmt.Printf("    ⚠  enforcement UNREACHABLE — failed OPEN, NOT a policy allow (%s)\n", dec.Message)
-	} else {
-		fmt.Printf("    🛡  allowed — executing\n")
-		if dest != "" {
-			// The interesting demo moment is egress being DENIED. If your agent's service-access
-			// policy permits external destinations, prism allows it and you land here — the
-			// platform's real decision for this agent. Run as an agent whose policy restricts egress
-			// to see the deny.
-			fmt.Printf("    note: this agent's policy PERMITS egress to %s (no external_service deny)\n", dest)
-		}
-	}
-	out := executeTool(tu)
-	fmt.Printf("    result: %s\n", out)
-	return anthropic.NewToolResultBlock(tu.ID, out, false)
-}
-
-// --- the agent's tools -----------------------------------------------------------------------
-
-func toolDefs() []anthropic.ToolUnionParam {
-	strProp := func(desc string) map[string]any {
-		return map[string]any{"type": "string", "description": desc}
-	}
-	tool := func(name, desc, arg, argDesc string) anthropic.ToolUnionParam {
-		return anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
-			Name: name, Description: anthropic.String(desc),
-			InputSchema: anthropic.ToolInputSchemaParam{
-				Properties: map[string]any{arg: strProp(argDesc)}, Required: []string{arg},
-			},
-		}}
-	}
-	return []anthropic.ToolUnionParam{
-		tool("lookup_order", "Look up an order's status by id.", "order_id", "the order id"),
-		tool("get_weather", "Get the current weather for a city.", "city", "the city name"),
-		tool("fetch_url", "Fetch the contents of an external URL over HTTP.", "url", "the URL to fetch"),
-	}
-}
-
-// executeTool runs an ALLOWED tool. The two local tools return canned data; fetch_url would perform
-// real egress — but policy denies it, so this branch is only reached if a deployment allows egress.
-func executeTool(tu anthropic.ToolUseBlock) string {
-	args := argMap(tu)
-	switch tu.Name {
-	case "lookup_order":
-		return fmt.Sprintf("order %s: status=IN_TRANSIT, carrier=DHL, eta=2 days", args["order_id"])
-	case "get_weather":
-		return fmt.Sprintf("weather in %s: 18°C, light rain", args["city"])
-	case "fetch_url":
-		return "(egress allowed by policy in this deployment; skipping real network call in the demo)"
-	default:
-		return "unknown tool"
-	}
-}
-
-// destOf returns the external destination host for a tool call (empty for local tools) — this is
-// what the tool_call policy inspects to allow/deny egress.
-func destOf(tu anthropic.ToolUseBlock) string {
-	if tu.Name != "fetch_url" {
-		return ""
-	}
-	if u, err := url.Parse(argMap(tu)["url"]); err == nil {
-		return u.Host
-	}
-	return ""
-}
-
-func argMap(tu anthropic.ToolUseBlock) map[string]string {
-	m := map[string]string{}
-	_ = json.Unmarshal(tu.Input, &m)
-	return m
-}
-
-func argSummary(tu anthropic.ToolUseBlock) string {
-	m := argMap(tu)
-	if len(m) == 0 {
-		return "()"
-	}
-	s := "("
-	first := true
-	for k, v := range m {
-		if !first {
-			s += ", "
-		}
-		s += k + "=" + v
-		first = false
-	}
-	return s + ")"
-}
-
-// --- setup helpers ---------------------------------------------------------------------------
 
 // setupTelemetry returns a guard option + a shutdown func. With OTEL=1 it installs the OpenTelemetry
 // sink behind a stdout exporter (spans print on shutdown); otherwise the guard uses its default
@@ -293,11 +224,135 @@ func setupTelemetry() (flyedge.Option, func()) {
 	return flyedge.WithTelemetry(feotel.New(nil)), func() { _ = tp.Shutdown(context.Background()) }
 }
 
-func banner(g *flyedge.Guard) {
-	fmt.Println("flyedge Go guard — reference agent")
-	fmt.Printf("  gateway: %s\n", envOr("COMPFLY_API_URL", "(unset)"))
-	fmt.Printf("  agent:   %s\n", g.DID())
-	fmt.Printf("  mode:    %s   otel-spans: %v\n\n", envOr("FLYEDGE_MODE", "warn"), os.Getenv("OTEL") != "")
+// runOnce handles a single message and exits — scripted one-off governed tests.
+func runOnce(ctx context.Context, a *agent, u *user, input string) error {
+	fmt.Printf("%syou ▸ %s%s\n", bold, reset, input)
+	reply, err := a.handle(ctx, u, "cli-"+randHex(), input)
+	if err != nil {
+		return err
+	}
+	printReply(reply)
+	return nil
+}
+
+// chatLoop is the interactive REPL. Every turn shares one session id, so the platform sees a single
+// continuous governed conversation (and per-session policy — rate/risk escalation — applies).
+func chatLoop(ctx context.Context, a *agent, u *user) error {
+	session := "cli-" + randHex()
+	fmt.Printf("%stype a request, or /exit to quit%s\n\n", dim, reset)
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for {
+		fmt.Printf("%syou ▸ %s", bold, reset)
+		if !sc.Scan() {
+			fmt.Println()
+			return nil
+		}
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		if line == "/exit" || line == "/quit" {
+			return nil
+		}
+		reply, err := a.handle(ctx, u, session, line)
+		if err != nil {
+			fmt.Printf("%serror: %v%s\n\n", red, err, reset)
+			continue
+		}
+		printReply(reply)
+		fmt.Println()
+	}
+}
+
+// pickProviderAndModel prompts for whichever of provider/model wasn't explicitly flagged. The
+// provider menu marks which key is present; the model menu is fetched LIVE from the chosen provider
+// (a metadata call — no completion tokens — that doubles as an early signal the key works).
+func pickProviderAndModel(ctx context.Context, hc *http.Client, providerName string, explicitProvider, explicitModel bool) (string, string) {
+	opts := providerOptions()
+	reader := bufio.NewReader(os.Stdin)
+
+	chosen := providerName
+	if !explicitProvider {
+		def := providerName
+		if def == "" {
+			for _, o := range opts {
+				if os.Getenv(o.EnvKey) != "" {
+					def = o.Name
+					break
+				}
+			}
+		}
+		if def == "" {
+			def = opts[0].Name
+		}
+		fmt.Println("── choose an LLM provider ──────────────────────────")
+		for i, o := range opts {
+			keyMark := "✗ (no key)"
+			if os.Getenv(o.EnvKey) != "" {
+				keyMark = "✓ " + o.EnvKey
+			}
+			fmt.Printf("  %d) %-10s %-22s default model: %s\n", i+1, o.Name, keyMark, o.DefaultModel)
+		}
+		fmt.Printf("provider [%s]: ", def)
+		pick := readLineOr(reader, def)
+		if idx, err := strconv.Atoi(pick); err == nil && idx >= 1 && idx <= len(opts) {
+			chosen = opts[idx-1].Name
+		} else {
+			chosen = pick
+		}
+	}
+
+	if explicitModel {
+		return chosen, ""
+	}
+	defaultModel := ""
+	for _, o := range opts {
+		if o.Name == chosen {
+			defaultModel = o.DefaultModel
+			break
+		}
+	}
+	fmt.Printf("fetching %s models ... ", chosen)
+	models, err := listModels(ctx, hc, chosen)
+	if err != nil {
+		fmt.Printf("unavailable (%v)\n", err)
+		fmt.Printf("model [%s]: ", defaultModel)
+		return chosen, readLineOr(reader, defaultModel)
+	}
+	fmt.Printf("%d found\n", len(models))
+	for i, m := range models {
+		fmt.Printf("  %d) %s\n", i+1, m)
+	}
+	fmt.Printf("model [%s]: ", defaultModel)
+	pick := readLineOr(reader, defaultModel)
+	if idx, err := strconv.Atoi(pick); err == nil && idx >= 1 && idx <= len(models) {
+		pick = models[idx-1]
+	}
+	return chosen, pick
+}
+
+// isInteractive reports whether stdin looks like a terminal, so the picker never blocks piped or
+// containerized runs. (A char-device check, not a tty ioctl — good enough for an example without
+// pulling in x/term.)
+func isInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+func readLineOr(r *bufio.Reader, def string) string {
+	line, _ := r.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return def
+	}
+	return line
+}
+
+func randHex() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 func envOr(k, def string) string {

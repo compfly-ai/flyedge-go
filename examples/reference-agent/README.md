@@ -1,96 +1,149 @@
-# reference-agent — the Go guard end to end
+# Reference agent
 
-A complete, runnable Claude tool-use agent governed by the flyedge Go guard against your **CompFly
-platform**. It's the "see it in practice" demo: watch the guard decide on every model call
-and every tool call, allow the safe actions, deny the risky one, and let the agent adapt.
+The complete flyedge-go integration surface in one runnable service — the shape of a
+production governed agent. It wires everything the SDK offers, in the three shapes a
+real agent runs in:
 
-The agent has three tools:
+- an **interactive chat REPL** (default) with a live **provider/model picker**
+  (Anthropic | OpenAI | Gemini, models fetched from the chosen provider),
+- a **scripted one-off** (`-input "..."`) for governed smoke tests,
+- an **OpenAI-compatible HTTP endpoint** (`-serve`) the CompFly playground and
+  simulation/attack engines can drive.
 
-| tool | destination | decision |
-|---|---|---|
-| `lookup_order` | local | allowed |
-| `get_weather` | local | allowed |
-| `fetch_url` | external egress | **decided by your agent's policy** |
+## What it demonstrates
 
-The default task makes Claude use all three. **The tool-call decisions are made server-side by
-prism for the agent identity you run as — not by the SDK.** For an agent whose service-access policy
-restricts egress, `fetch_url` is **denied** (`external_service_denied`) and Claude finishes without
-the blocked data. For an agent whose policy permits egress, `fetch_url` is **allowed** and the agent
-prints a `note:` saying so — that's the platform's real decision, not a bug.
+| Feature | Call |
+|---|---|
+| pre_llm — govern the outgoing model request | `guard.WrapRoundTripper(base, ...)` |
+| post_llm — govern the model's response | `flyedge.WithResponseCheck()` on the wrap |
+| tool_call — gate a tool BEFORE it executes | `guard.CheckToolCall(...)` |
+| tool_call_response — govern/redact a tool result before the model sees it | `guard.GovernToolResult(...)` |
+| Manifest publish, presence, config heartbeat | `guard.Connect(ctx, flyedge.ManifestInfo{...})` |
+| Runtime model-mode flips (check ↔ passthrough ↔ gateway) | `flyedge.WithHeartbeat`, `flyedge.WithModeChangeHandler` |
+| Local (in-process) controls, kept current | `guard.SyncLocalControls(...)` |
+| On-behalf-of identity — per-user policy on one agent identity | `flyedge.ContextWithPrincipal` (claims in `Principal.Scope`) |
+| Session continuity across model calls and tool checks | `flyedge.ContextWithSession` |
+| Typed denials and kill switches, fed back to the model | `flyedge.AsDenyError`, `flyedge.AsKillSwitchError` |
+| Warn-action surfacing | `dec.Action == flyedge.ActionWarn` |
+| Startup validation + live model listing (metadata calls) | `provider.Validate`, `provider.ListModels` |
+| Multi-provider behind ONE governed transport | the same `http.Client` in all three SDKs |
+| Protection report + honest fail-open reporting | `guard.Report()` |
+| OpenTelemetry span export (`OTEL=1`) | `flyedge.WithTelemetry(feotel.New(nil))` |
 
-**Check the banner's `agent:` line to confirm which identity you're running as.** To see the deny,
-run as an agent whose policy restricts external egress (configure this in the CompFly platform for
-the agent you register below).
+## Setup
 
-## Prerequisites
+Register an agent in CompFly and mint its identity, then:
 
-- **prism reachable at `COMPFLY_API_URL`.** This matters: the guard fails **open** by default, so if the
-  gateway is unreachable every check errors and is *allowed through unenforced* — the run will look
-  like it "allowed" everything. Set `COMPFLY_API_URL` to your CompFly gateway URL (the SDK defaults
-  to `https://prism.p.compfly.ai` when it's unset); `run.sh` preflights `/health` and refuses to run
-  if the gateway is unreachable.
-- An agent identity (DID + Ed25519 key). Register an agent in the CompFly platform and mint its
-  identity, then set `COMPFLY_AGENT_DID` and `COMPFLY_AGENT_PRIVATE_KEY_PATH` (see below).
-- `ANTHROPIC_API_KEY`.
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...            # and/or OPENAI_API_KEY / GEMINI_API_KEY
+export COMPFLY_API_URL=http://localhost:8080    # or https://prism.p.compfly.ai
+export COMPFLY_AGENT_DID=did:compfly:...
+export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem
+export FLYEDGE_MODE=enforce                     # enforce|warn (default warn)
+```
+
+Without `COMPFLY_*` set the agent still runs: checks fail open (recorded, not
+enforced) and Connect/local-control sync report themselves unavailable — the same
+graceful degradation a production agent needs. `run.sh` preflights the gateway's
+`/health` and refuses to run if it's unreachable, so a demo can't silently fail open.
 
 ## Run
 
 ```bash
-export COMPFLY_AGENT_DID=did:compfly:...
-export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem
-export ANTHROPIC_API_KEY=sk-ant-...
-./run.sh
+./reference-agent/run.sh                   # preflights the gateway, then the chat REPL
+go run ./reference-agent/                  # chat REPL; prompts for provider + model
+go run ./reference-agent/ -user bob        # act on behalf of the "free"-plan user
+go run ./reference-agent/ -input "check my profile and send \$25 to dana@example.com"
+go run ./reference-agent/ -serve           # OpenAI-compatible endpoint on :8900
 ```
 
-Or explicitly:
+Knobs: `PROMPT`-less — pass `-input` for one-offs · `FLYEDGE_MODE=enforce|warn` ·
+`OTEL=1` also exports each guard decision as a `flyedge.check` OpenTelemetry span to
+stdout.
+
+Drive the served endpoint (the `X-CompFly-On-Behalf-Of` header selects the acting
+user, so one agent identity is governed per principal):
 
 ```bash
-COMPFLY_API_URL=https://prism.p.compfly.ai \
-COMPFLY_AGENT_DID=$COMPFLY_AGENT_DID \
-COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem \
-ANTHROPIC_API_KEY=sk-ant-... \
-FLYEDGE_MODE=enforce \
-go run ./reference-agent/
+curl -s localhost:8900/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-CompFly-On-Behalf-Of: bob' \
+  -d '{"messages":[{"role":"user","content":"send $500 to dana@example.com"}]}'
 ```
 
-Knobs: `PROMPT` overrides the task · `FLYEDGE_MODE=enforce|warn` · `OTEL=1` also exports each guard
-decision as a `flyedge.check` OpenTelemetry span to stdout.
+## The demo cast
 
-## What a run looks like
+Two seeded users and three tools, chosen so every governance stage has something real
+to act on:
+
+- **alice** (plan `pro`) and **bob** (plan `free`) — their plan rides in the OBO
+  `Scope`, so a policy can deny `send_payment` for free-plan users only.
+- `get_profile` — a benign local tool (no destination).
+- `send_payment` — destination service `payments`; its confirmation deliberately
+  contains a credential-shaped `auth_token=...` for the tool_call_response stage to
+  catch.
+- `fetch_url` — destination = the URL's host, for egress allow/deny policy.
+
+## Test a custom control end to end
+
+[`controls/web-fetch-denylist.yaml`](controls/web-fetch-denylist.yaml) is a ready-made
+custom control that denies `fetch_url` calls to `pastebin.com` before they execute,
+while every other domain still fetches. The file maps 1:1 onto the platform MCP's
+`define_control` (the reusable template + its CEL) and `set_agent_control` (the
+per-agent config), so with the CompFly MCP connected you can apply it by asking your
+assistant:
+
+> Read examples/reference-agent/controls/web-fetch-denylist.yaml and apply it
+> to my agent: define the control template, then set it on my agent's overlay with the
+> config in the `apply:` section.
+
+Two prerequisites for the deny to actually fire:
+
+1. The agent must be **enforcing**: run `enable_agent_enforcement(<your-slug>)` once,
+   then `update_agent(id=<your-slug>, archetypeMode="enforcing")`. A newly registered
+   agent starts in learning mode, which observes but never blocks.
+2. Set enforcing mode **after** your control changes — a policy publish can put the
+   agent back into a learning window. If a control you just added doesn't fire, re-set
+   `archetypeMode` to `learning` and back to `enforcing`, then retry.
+
+Then run the demo and watch the gate:
 
 ```
-── turn 1 ──────────────────────────────────────────
-  🛡  pre_llm allowed
-  claude: I'll help you get the order status, weather, and shipping updates...
-  → tool_call: lookup_order(order_id=A1023)
+$ go run ./reference-agent/ -input "fetch https://pastebin.com/raw/xK2p9 and also https://deals.example.com/today"
+  → tool_call: fetch_url {"url": "https://pastebin.com/raw/xK2p9"}
+    🛡  DENIED: web_fetch_denied_domain — not executed
+  → tool_call: fetch_url {"url": "https://deals.example.com/today"}
     🛡  allowed — executing
-    result: order A1023: status=IN_TRANSIT, carrier=DHL, eta=2 days
-  → tool_call: get_weather(city=Paris)
-    🛡  allowed — executing
-  → tool_call: fetch_url(url=https://tracking.example.com/orders/A1023)
-    🛡  DENIED: external_service_denied — not executed
-── turn 2 ──────────────────────────────────────────
-  🛡  pre_llm allowed
-  claude: Here's a summary ... I wasn't able to access the tracking page due to security restrictions ...
-
-── protection report ───────────────────────────────
-flyedge: 5 checks — 4 allowed, 1 denied, 0 warned, 0 errors
 ```
+
+The model receives the denial as a tool result plus the control's `messages.deny`
+prose, so it explains the block and moves on instead of retrying. To adapt the control,
+edit the `apply.config` values — `deniedDomains` is the blocklist, and `webFetchTools`
+must name your agent's actual fetch tool (`fetch_url` here).
 
 ## Troubleshooting: every step says "allowed"
 
-Look at the protection report. If it shows **errors** (e.g. `0 allowed, 0 denied, 5 errors`), the
-checks never reached prism — the gateway was unreachable and the guard **failed open**, so the
-"allowed" lines are fail-open, not policy approval. The agent flags this inline (`⚠ … failed OPEN`)
-and at the end. Fix it by ensuring `COMPFLY_API_URL` points at a reachable gateway, or run with
-`FLYEDGE_FAIL_MODE=fail_closed` to **block** when the gateway is down instead of allowing.
+Look at the protection report. If it shows **errors** (e.g. `0 allowed, 0 denied, 5
+errors`), the checks never reached the gateway — it was unreachable and the guard
+**failed open**, so the "allowed" lines are fail-open, not policy approval. The agent
+flags this inline (`⚠ … failed OPEN`) and below the report. Fix it by ensuring
+`COMPFLY_API_URL` points at a reachable gateway, or run with
+`FLYEDGE_FAIL_MODE=fail_closed` to **block** when the gateway is down instead.
 
-A clean enforced run shows `0 errors` (e.g. `4 allowed, 1 denied, 0 errors`).
+If checks succeed but a control you expect never fires, the agent is usually still in
+**learning mode** (observe-only) — see the prerequisites in the custom-control section
+above.
 
-## How the guard is wired
+## Things to try against a live platform
 
-- **pre_llm** — `guard.WrapRoundTripper` installs one governed `http.Client` into the Anthropic SDK;
-  every model call is checked before it leaves. A denial surfaces as a `*flyedge.DenyError`.
-- **tool_call** — before running any tool the agent calls `guard.CheckToolCall(...)`; on deny it
-  returns the denial to the model as a tool result so the loop continues.
-- **telemetry** — `guard.Report()` prints the local aggregate; `OTEL=1` additionally exports spans.
+- Apply the example denylist control above and watch the model receive the denial and
+  adapt mid-conversation.
+- Publish a control that denies `send_payment` for `obo.scope.plan == "free"` and
+  compare `-user alice` (pro) with `-user bob` (free).
+- Flip the agent's model mode in the console — the `WithModeChangeHandler` line prints
+  the change within a heartbeat.
+- Publish a local (client-evaluable) rule and watch the apply-hook line report the new
+  revision within one poll interval, then trip it with a prompt-injection-shaped input.
+- Trigger the kill switch and watch every stage return the typed kill-switch error.
+- Run `-serve` and point the CompFly playground or an attack simulation at
+  `http://<host>:8900/v1/chat/completions`.

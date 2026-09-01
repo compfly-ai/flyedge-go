@@ -794,7 +794,7 @@ More runnable examples live under `flyedge-go/examples/`:
 | `openai` | Minimal governed OpenAI agent (model + tool call) |
 | `gemini` | Minimal governed Gemini agent via `genai` (model + tool call) |
 | `agentframework` | Microsoft Agent Framework Go with governed model and automatic tool calls |
-| `reference-agent` | Full tool-use loop with DID + deny-on-egress |
+| `reference-agent` | The complete integration surface: Connect + heartbeat, mode changes, local controls, all four stages, on-behalf-of identity, provider/model picker, chat REPL + HTTP serve mode, example custom control |
 | `manual` | Direct `Check` / `CheckToolCall` calls without a client |
 | `langchaingo` | Governing a `langchaingo` LLM via `WithHTTPClient` |
 | `tools` | Tool-call + tool-response guarding |
