@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Run the reference agent against your CompFly platform.
 # Prereqs: COMPFLY_AGENT_DID and COMPFLY_AGENT_PRIVATE_KEY_PATH set (register an agent and mint its
-# identity in the CompFly platform), ANTHROPIC_API_KEY set, and COMPFLY_API_URL pointing at a
-# reachable gateway (defaults to https://prism.p.compfly.ai when unset).
+# identity in the CompFly platform), at least one LLM key (ANTHROPIC_API_KEY / OPENAI_API_KEY /
+# GEMINI_API_KEY), and COMPFLY_API_URL pointing at a reachable gateway (defaults to
+# https://prism.p.compfly.ai when unset). Extra args pass through: ./run.sh -serve
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,7 +17,11 @@ if [ -z "${COMPFLY_AGENT_DID:-}" ] || [ -z "${COMPFLY_AGENT_PRIVATE_KEY_PATH:-}"
 	echo "    export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem" >&2
 	exit 1
 fi
-export COMPFLY_AGENT_DID COMPFLY_AGENT_PRIVATE_KEY_PATH
+
+if [ -z "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}${GEMINI_API_KEY:-}" ]; then
+	echo "✗ No LLM key. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY." >&2
+	exit 1
+fi
 
 # Preflight: the guard fails OPEN by default, so an unreachable gateway silently allows everything.
 # Catch it here rather than letting the demo look like it "allowed" every action.
@@ -28,4 +33,4 @@ if ! curl -fsS -m 3 "$COMPFLY_API_URL/health" >/dev/null 2>&1; then
 fi
 echo "✓ gateway reachable: $COMPFLY_API_URL   agent: $COMPFLY_AGENT_DID"
 
-exec go run ./reference-agent/
+exec go run ./reference-agent/ "$@"

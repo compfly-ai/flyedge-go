@@ -137,7 +137,7 @@ another path. Kill switches surface separately as `*KillSwitchError`.
 
 Runnable programs in [`examples/`](examples/), each with its own README:
 
-- `reference-agent` — a governed Claude tool-use agent, end to end against CompFly
+- `reference-agent` — the complete integration surface (Connect, heartbeat, local controls, all four stages, on-behalf-of identity) as a chat REPL, one-off, or OpenAI-compatible HTTP service, with a ready-made custom control to test enforcement
 - `agent` — one governed transport wrap across the Anthropic and OpenAI SDKs
 - `openai`, `gemini` — single-provider governed model + tool calls
 - `agentframework` — Microsoft Agent Framework Go with governed model and automatic tool calls

@@ -1,0 +1,57 @@
+# Web Fetch Destination Denylist — the custom control used in this example's README demo.
+#
+# It denies any web-fetch tool call whose destination domain is on a configured denylist,
+# BEFORE the tool executes (the tool_call stage). Applied to this agent, it blocks
+# `fetch_url` calls to pastebin.com while every other domain still fetches.
+#
+# HOW TO APPLY: with the CompFly platform MCP connected, ask your assistant to read this
+# file and apply it to your instance of the agent. It maps 1:1 onto two MCP calls:
+#
+#   1. define_control      <- everything under `control:` (org-wide reusable template)
+#   2. set_agent_control   <- everything under `apply:`   (parameterize it on YOUR agent)
+#
+# Then make sure the agent is ENFORCING (see the README section) and re-run the agent.
+# Expected: fetch_url(https://pastebin.com/...) -> denied with reason `web_fetch_denied_domain`.
+
+control:
+  intentId: webFetchDenylist
+  displayName: Web Fetch Destination Denylist
+  description: >-
+    Deny web-fetch tool calls whose destination domain matches an
+    org/agent-configured denylist.
+  stages: [tool_call]
+  defaultAction: allow
+  # CEL evaluated by the policy enforcer per tool call. `tool_name` and `dest_domain`
+  # come from the SDK's CheckToolCall(ctx, session, name, args, destDomain);
+  # `config.*` comes from the per-agent overlay set below.
+  expression: >-
+    (has(config.webFetchTools) && tool_name in config.webFetchTools &&
+     has(config.deniedDomains) && size(dest_domain) > 0 &&
+     config.deniedDomains.exists(d, dest_domain.contains(d)))
+    ? {"triggered": true, "action": "deny", "reason": "web_fetch_denied_domain"}
+    : {"triggered": false, "action": "allow", "reason": "ok"}
+  configurableFields:
+    - fieldId: deniedDomains
+      type: string_array
+      description: Destination domains to deny for web-fetch tools
+    - fieldId: webFetchTools
+      type: string_array
+      description: Tool names treated as web-fetch tools (gates the denylist)
+  messages:
+    # The prose the agent sees when the control fires — without it, the model gets only
+    # the bare reason code and tends to retry.
+    deny: >-
+      This block is final — do not retry. Carry on with the task without that site's
+      content, and when you report back, tell the user which domain was blocked and
+      that the block came from CompFly (https://compfly.ai).
+
+apply:
+  # Your agent's slug — change if you registered the agent under a different name.
+  agentSlug: reference-agent
+  intentId: webFetchDenylist
+  config:
+    deniedDomains: [pastebin.com]
+    # Must contain the agent's ACTUAL web-fetch tool name. This example's tool is
+    # `fetch_url` (see agent.go); a denylist gated to tool names that never occur
+    # silently matches nothing.
+    webFetchTools: [fetch_url]
