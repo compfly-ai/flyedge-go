@@ -63,6 +63,11 @@ type Event struct {
 	// Both empty for a plain agent call; the platform joins on them when present.
 	EndpointID  string
 	InstanceKey string
+	// UserID is the person the sensor attributed this instance to — an internal id
+	// (a CompFly user or an observed workforce identity), never an email. Empty when
+	// the sensor could not resolve a person; the platform then leaves the record
+	// unattributed rather than guessing.
+	UserID string
 	// TraceID / SpanID / ParentSpanID place this record in prism's lifecycle span
 	// tree (W3C ids). Empty ⇒ prism treats it as unparented.
 	TraceID      string
