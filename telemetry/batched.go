@@ -183,12 +183,16 @@ func toOtelEvents(evs []Event) []otelEvent {
 			SessionID:        e.SessionID,
 			EndpointID:       e.EndpointID,
 			InstanceKey:      e.InstanceKey,
-			Timestamp:        e.OccurredAt.UTC().Format(time.RFC3339),
-			AgentFramework:   e.AgentFramework,
-			Streaming:        e.Streaming,
-			RequestFull:      e.RequestFull,
-			ResponseFull:     e.ResponseFull,
-			Data:             data,
+			// Nanosecond form: RFC3339 alone is whole seconds, which collapsed every
+			// event of a fast turn onto one instant and left the platform ordering a
+			// trace's spans arbitrarily within it. prism parses the fractional part
+			// and the analytics store keeps milliseconds.
+			Timestamp:      e.OccurredAt.UTC().Format(time.RFC3339Nano),
+			AgentFramework: e.AgentFramework,
+			Streaming:      e.Streaming,
+			RequestFull:    e.RequestFull,
+			ResponseFull:   e.ResponseFull,
+			Data:           data,
 		})
 	}
 	return out

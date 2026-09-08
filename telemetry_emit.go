@@ -52,6 +52,19 @@ type LLMCall struct {
 	LatencyMS float64
 	Streamed  *bool
 
+	// Trace placement. TraceID/SpanID put the call in the caller's span tree, so a check that
+	// names this span as its parent (ContextWithTrace) renders nested under the call it governs
+	// rather than as an orphan root. Optional — leave both empty and the event ships untraced, as
+	// before.
+	TraceID string
+	SpanID  string
+
+	// OccurredAt is when the call actually happened. An observer reporting a call it read from a
+	// transcript or a log is not reporting it at the instant it emits, and the platform orders a
+	// trace by this timestamp — so a passive sensor must say when, not let the emit time stand in.
+	// Zero means now.
+	OccurredAt time.Time
+
 	// Delegation, for a call made by a subagent rather than by the agent's main loop. A subagent
 	// runs inside its parent and reports the parent's SessionID, so without these its spend is
 	// indistinguishable from work the parent did itself.
@@ -79,15 +92,23 @@ func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 		TotalTokens:      c.InputTokens + c.OutputTokens,
 		CacheReadTokens:  c.CacheReadTokens,
 		CacheWriteTokens: c.CacheWriteTokens,
-		LatencyMS:        c.LatencyMS, Streaming: c.Streamed, OccurredAt: time.Now(),
+		LatencyMS:        c.LatencyMS, Streaming: c.Streamed, OccurredAt: orNow(c.OccurredAt),
 		Name:         c.ComponentName,
+		TraceID:      c.TraceID,
+		SpanID:       c.SpanID,
 		ParentSpanID: c.ParentSpanID,
 	}
 	// A delegated call is attributed to the subagent that made it. The agent id itself stays the
 	// authenticated agent's — the platform resolves that from the batch, and overwriting it here
 	// would misattribute the spend to a subagent that holds no identity of its own.
+	//
+	// The subagent id stands in for a span only when the caller named none: it is an agent id, not
+	// a 16-hex span, so a real span always wins — otherwise supplying one would silently break the
+	// trace placement it was passed for.
 	if c.AgentID != "" {
-		ev.SpanID = c.AgentID
+		if ev.SpanID == "" {
+			ev.SpanID = c.AgentID
+		}
 		ev.Data = map[string]any{"delegated": true, "subagent_id": c.AgentID}
 		if c.ComponentName != "" {
 			ev.Data["subagent_type"] = c.ComponentName
@@ -123,6 +144,10 @@ type ToolIO struct {
 	ParentSpanID   string
 	AgentFramework string
 	Data           map[string]any
+
+	// OccurredAt is when the tool actually ran. Zero means now — see LLMCall.OccurredAt for why an
+	// observer has to say when rather than let the emit time stand in.
+	OccurredAt time.Time
 }
 
 // RecordToolIO emits a tool_io event (tool name + args/result). argsJSON/resultJSON are
@@ -146,8 +171,17 @@ func (g *Guard) RecordToolIODetail(c ToolIO) {
 		Name: c.ToolName, Operation: "tool.call",
 		AgentFramework: c.AgentFramework,
 		RequestFull:    c.ArgsJSON, ResponseFull: c.ResultJSON, Data: c.Data,
-		OccurredAt: time.Now(),
+		OccurredAt: orNow(c.OccurredAt),
 	})
+}
+
+// orNow resolves an optional caller-supplied event time. A passive observer knows when the thing
+// it saw happened; an inline caller usually does not care and leaves it zero.
+func orNow(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now()
+	}
+	return t
 }
 
 // RecordSessionStart / RecordSessionSummary emit agent-session lifecycle telemetry.
