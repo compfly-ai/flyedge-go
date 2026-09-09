@@ -43,6 +43,9 @@ type LLMCall struct {
 	// Optional — a plain agent call leaves them empty and emits exactly as before.
 	EndpointID  string
 	InstanceKey string
+	// UserID is the person the sensor attributed the instance to (internal id, never
+	// an email). Optional — empty leaves the record unattributed.
+	UserID string
 
 	InputTokens      int64 // uncached input, as the provider reports it
 	OutputTokens     int64
@@ -86,7 +89,7 @@ func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 	}
 	ev := telemetry.Event{
 		Type: telemetry.EventLLMIO, SessionID: c.SessionID, RequestID: c.RequestID,
-		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey,
+		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey, UserID: c.UserID,
 		Model: c.Model, Provider: c.Provider, Operation: "chat",
 		InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 		TotalTokens:      c.InputTokens + c.OutputTokens,
@@ -135,6 +138,9 @@ type ToolIO struct {
 	// Optional — a plain agent call leaves them empty and emits exactly as before.
 	EndpointID  string
 	InstanceKey string
+	// UserID is the person the sensor attributed the instance to (internal id, never
+	// an email). Optional — empty leaves the record unattributed.
+	UserID string
 
 	ArgsJSON   string
 	ResultJSON string
@@ -166,7 +172,7 @@ func (g *Guard) RecordToolIODetail(c ToolIO) {
 	}
 	g.tel.Record(telemetry.Event{
 		Type: telemetry.EventToolIO, SessionID: c.SessionID, RequestID: c.RequestID,
-		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey,
+		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey, UserID: c.UserID,
 		TraceID: c.TraceID, SpanID: c.SpanID, ParentSpanID: c.ParentSpanID,
 		Name: c.ToolName, Operation: "tool.call",
 		AgentFramework: c.AgentFramework,

@@ -144,12 +144,16 @@ func TestWireCarriesInstanceAttribution(t *testing.T) {
 		Type: EventLLMIO, Model: "claude-opus-4-8",
 		EndpointID:  "install-7f3a",
 		InstanceKey: "claude-code\x00/Users/prakash/dev/payments-api",
+		UserID:      "507f1f77bcf86cd799439011",
 	}})
 	if len(got) != 1 {
 		t.Fatalf("expected 1 wire event, got %d", len(got))
 	}
 	if got[0].EndpointID != "install-7f3a" || got[0].InstanceKey != "claude-code\x00/Users/prakash/dev/payments-api" {
 		t.Errorf("instance attribution not carried into wire event: %+v", got[0])
+	}
+	if got[0].UserID != "507f1f77bcf86cd799439011" {
+		t.Errorf("user attribution not carried into wire event: %+v", got[0])
 	}
 
 	// Confirm the JSON keys are the agreed snake_case names, not the Go field names.
@@ -166,6 +170,9 @@ func TestWireCarriesInstanceAttribution(t *testing.T) {
 	}
 	if m["instance_key"] != "claude-code\x00/Users/prakash/dev/payments-api" {
 		t.Errorf("instance_key key missing/wrong in wire JSON: %s", raw)
+	}
+	if m["user_id"] != "507f1f77bcf86cd799439011" {
+		t.Errorf("user_id key missing/wrong in wire JSON: %s", raw)
 	}
 }
 

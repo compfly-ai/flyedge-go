@@ -143,6 +143,7 @@ type otelEvent struct {
 	SessionID        string `json:"session_id,omitempty"`
 	EndpointID       string `json:"endpoint_id,omitempty"`
 	InstanceKey      string `json:"instance_key,omitempty"`
+	UserID           string `json:"user_id,omitempty"`
 	Timestamp        string `json:"timestamp"`
 	AgentFramework   string `json:"agent_framework,omitempty"`
 	Streaming        *bool  `json:"streaming,omitempty"`
@@ -183,6 +184,7 @@ func toOtelEvents(evs []Event) []otelEvent {
 			SessionID:        e.SessionID,
 			EndpointID:       e.EndpointID,
 			InstanceKey:      e.InstanceKey,
+			UserID:           e.UserID,
 			// Nanosecond form: RFC3339 alone is whole seconds, which collapsed every
 			// event of a fast turn onto one instant and left the platform ordering a
 			// trace's spans arbitrarily within it. prism parses the fractional part
