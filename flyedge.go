@@ -227,12 +227,25 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	// (ContextWithTrace) or a session-derived trace, so prism nests it in the
 	// lifecycle span tree (it reads the traceparent header) and the emitted
 	// telemetry carries the same ids.
+	//
+	// The span on the traceparent is the PARENT prism records for the check: it
+	// mints the check's own span and keeps ours as parent_span_id. So a caller
+	// that names the span its operation runs under must have that span put on
+	// the wire — sending a locally minted one instead named a parent no other
+	// row carries, and the check rendered as an orphan root instead of nesting
+	// under the operation it governs. With no caller span there is nothing to
+	// nest under, and the minted one still gives prism the span identity it
+	// requires to record the check at all.
 	traceID, parentSpan, hasTrace := traceFromContext(ctx)
 	if !hasTrace || traceID == "" {
 		traceID = deriveTraceID(req.SessionID)
 	}
 	spanID := newSpanID()
-	ctx = enforce.ContextWithTraceparent(ctx, formatTraceparent(traceID, spanID))
+	headerSpan := parentSpan
+	if headerSpan == "" {
+		headerSpan = spanID
+	}
+	ctx = enforce.ContextWithTraceparent(ctx, formatTraceparent(traceID, headerSpan))
 
 	// Simulation: when a run is active, observe the operation (stream a RuntimeEvent) and — if the
 	// run requested protection be disabled (baseline eval) — bypass the policy check with an allow,

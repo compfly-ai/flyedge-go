@@ -20,11 +20,16 @@ type traceCtxKey struct{}
 
 type traceCtx struct {
 	traceID string // 32 hex
-	spanID  string // 16 hex — the caller's current span (parent of the SDK's check span)
+	spanID  string // 16 hex — the caller's current span (the parent prism records for the check)
 }
 
 // ContextWithTrace attaches the caller's W3C trace so a Check and its telemetry
 // nest under the caller's span. traceID must be 32 hex chars, spanID 16 hex.
+//
+// spanID is the span the check nests UNDER — the operation being governed, not
+// the check. It is sent as the traceparent's span field, which is what prism
+// records as the check's parent_span_id (prism mints the check's own span). Pass
+// "" when the caller has no enclosing span and the check is a root of the trace.
 func ContextWithTrace(ctx context.Context, traceID, spanID string) context.Context {
 	return context.WithValue(ctx, traceCtxKey{}, traceCtx{traceID: traceID, spanID: spanID})
 }

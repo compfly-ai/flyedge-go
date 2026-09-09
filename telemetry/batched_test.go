@@ -196,3 +196,45 @@ func TestWireInstanceAttributionOmittedWhenUnset(t *testing.T) {
 		t.Errorf("instance_key must be omitted when unset: %s", raw)
 	}
 }
+
+// The wire timestamp must keep sub-second precision. RFC3339 alone is whole seconds, which
+// collapsed every event of a fast turn onto one instant and left the platform ordering a trace's
+// spans arbitrarily within it.
+func TestWireTimestampKeepsSubSecondPrecision(t *testing.T) {
+	when := time.Date(2026, 9, 8, 16, 42, 0, 394_000_000, time.UTC)
+	got := toOtelEvents([]Event{{Type: EventLLMIO, Model: "claude-fable-5-1", OccurredAt: when}})
+	if len(got) != 1 {
+		t.Fatalf("expected 1 wire event, got %d", len(got))
+	}
+	if got[0].Timestamp != "2026-09-08T16:42:00.394Z" {
+		t.Errorf("wire timestamp = %q, want the fractional form", got[0].Timestamp)
+	}
+}
+
+// Trace placement survives the wire under the snake_case keys prism reads.
+func TestWireCarriesTracePlacement(t *testing.T) {
+	got := toOtelEvents([]Event{{
+		Type:         EventToolIO,
+		Name:         "Bash",
+		TraceID:      "0123456789abcdef0123456789abcdef",
+		SpanID:       "1111222233334444",
+		ParentSpanID: "5555666677778888",
+	}})
+	raw, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for key, want := range map[string]string{
+		"trace_id":       "0123456789abcdef0123456789abcdef",
+		"span_id":        "1111222233334444",
+		"parent_span_id": "5555666677778888",
+	} {
+		if m[key] != want {
+			t.Errorf("%s = %v, want %q (raw: %s)", key, m[key], want, raw)
+		}
+	}
+}
