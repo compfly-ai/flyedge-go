@@ -143,3 +143,12 @@ func TestRecordToolIODetailCarriesTracePlacementAndTime(t *testing.T) {
 		t.Errorf("OccurredAt = %s, want %s", ev.OccurredAt, when)
 	}
 }
+
+func TestRecordLLMCallDetailCarriesContent(t *testing.T) {
+	tel := &captureTelemetry{}
+	g := &Guard{tel: tel}
+	g.RecordLLMCallDetail(LLMCall{SessionID: "s", RequestFull: "Fix the bug", ResponseFull: "Fixed it."})
+	if len(tel.events) != 1 || tel.events[0].RequestFull != "Fix the bug" || tel.events[0].ResponseFull != "Fixed it." {
+		t.Fatalf("content lost: %+v", tel.events)
+	}
+}

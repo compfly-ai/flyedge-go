@@ -34,6 +34,10 @@ func (g *Guard) RecordLLMCallStreamed(sessionID, requestID, model, provider stri
 // The wire sums them into input_tokens and ships the breakdown alongside — callers never have to
 // decide how to combine the tiers.
 type LLMCall struct {
+	// Optional observed content for the call; callers decide what to capture.
+	RequestFull  string
+	ResponseFull string
+
 	SessionID string
 	RequestID string
 	Model     string
@@ -88,6 +92,7 @@ func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 		return
 	}
 	ev := telemetry.Event{
+		RequestFull: c.RequestFull, ResponseFull: c.ResponseFull,
 		Type: telemetry.EventLLMIO, SessionID: c.SessionID, RequestID: c.RequestID,
 		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey, UserID: c.UserID,
 		Model: c.Model, Provider: c.Provider, Operation: "chat",
