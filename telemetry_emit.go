@@ -4,6 +4,7 @@
 package flyedge
 
 import (
+	"maps"
 	"time"
 
 	"github.com/compfly-ai/flyedge-go/telemetry"
@@ -34,6 +35,14 @@ func (g *Guard) RecordLLMCallStreamed(sessionID, requestID, model, provider stri
 // The wire sums them into input_tokens and ships the breakdown alongside — callers never have to
 // decide how to combine the tiers.
 type LLMCall struct {
+	// AgentFramework identifies the observing framework. Operation defaults to "chat".
+	AgentFramework string
+	Operation      string
+	// Data carries optional metadata such as native turn IDs, finish reasons, or
+	// content truncation indicators. Delegation keys are reserved by the SDK.
+	Data map[string]any
+	// Err describes a failed call, independent of policy-check decisions.
+	Err string
 	// Optional observed content for the call; callers decide what to capture.
 	RequestFull  string
 	ResponseFull string
@@ -91,11 +100,16 @@ func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 	if g == nil || g.tel == nil {
 		return
 	}
+	operation := c.Operation
+	if operation == "" {
+		operation = "chat"
+	}
 	ev := telemetry.Event{
+		AgentFramework: c.AgentFramework, Data: maps.Clone(c.Data), Err: c.Err,
 		RequestFull: c.RequestFull, ResponseFull: c.ResponseFull,
 		Type: telemetry.EventLLMIO, SessionID: c.SessionID, RequestID: c.RequestID,
 		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey, UserID: c.UserID,
-		Model: c.Model, Provider: c.Provider, Operation: "chat",
+		Model: c.Model, Provider: c.Provider, Operation: operation,
 		InputTokens: c.InputTokens, OutputTokens: c.OutputTokens,
 		TotalTokens:      c.InputTokens + c.OutputTokens,
 		CacheReadTokens:  c.CacheReadTokens,
@@ -117,7 +131,11 @@ func (g *Guard) RecordLLMCallDetail(c LLMCall) {
 		if ev.SpanID == "" {
 			ev.SpanID = c.AgentID
 		}
-		ev.Data = map[string]any{"delegated": true, "subagent_id": c.AgentID}
+		if ev.Data == nil {
+			ev.Data = make(map[string]any)
+		}
+		ev.Data["delegated"] = true
+		ev.Data["subagent_id"] = c.AgentID
 		if c.ComponentName != "" {
 			ev.Data["subagent_type"] = c.ComponentName
 		}
@@ -135,6 +153,10 @@ func (g *Guard) emitLLM(sessionID, requestID, model, provider string, inputToken
 // ToolIO carries one observed tool invocation. ArgsJSON/ResultJSON are optional audit payloads;
 // callers that only need usage attribution can leave them empty.
 type ToolIO struct {
+	// LatencyMS is the observed execution duration; zero means unknown.
+	LatencyMS float64
+	// Err describes a failed tool execution, independent of policy decisions.
+	Err       string
 	SessionID string
 	RequestID string
 	ToolName  string
@@ -177,6 +199,7 @@ func (g *Guard) RecordToolIODetail(c ToolIO) {
 	}
 	g.tel.Record(telemetry.Event{
 		Type: telemetry.EventToolIO, SessionID: c.SessionID, RequestID: c.RequestID,
+		LatencyMS: c.LatencyMS, Err: c.Err,
 		EndpointID: c.EndpointID, InstanceKey: c.InstanceKey, UserID: c.UserID,
 		TraceID: c.TraceID, SpanID: c.SpanID, ParentSpanID: c.ParentSpanID,
 		Name: c.ToolName, Operation: "tool.call",

@@ -163,6 +163,16 @@ func toOtelEvents(evs []Event) []otelEvent {
 		if data == nil && typ == EventProtection {
 			data = map[string]any{"stage": e.Stage, "action": e.Action, "reason": e.Reason, "error": e.Err}
 		}
+		// Call failures must survive cloud export too, not only local/OTel sinks.
+		// Copy before adding the reserved error key; Data belongs to the caller.
+		if e.Err != "" {
+			copyData := make(map[string]any, len(data)+1)
+			for k, v := range data {
+				copyData[k] = v
+			}
+			copyData["error"] = e.Err
+			data = copyData
+		}
 		out = append(out, otelEvent{
 			Type:             typ,
 			Source:           "sdk",
