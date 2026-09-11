@@ -327,7 +327,7 @@ Tool calls are the highest-leverage governance point: this is where an agent
 reads a file, hits an API, or spends money. Check **before** you execute:
 
 ```go
-dec, err := guard.CheckToolCall(ctx, session, toolName, argsJSON, destDomain)
+dec, err := guard.CheckToolCall(ctx, session, toolName, argsJSON)
 if err != nil {
     if de, ok := flyedge.AsDenyError(err); ok {
         // Return the denial to the model as the tool result, so it can adapt.
@@ -338,9 +338,8 @@ if err != nil {
 // allowed (or warned) — run the tool
 ```
 
-`destDomain` is the network destination the tool will contact (e.g.
-`"api.stripe.com"`), which lets egress policy apply. Pass `""` if the tool makes
-no outbound call.
+Policies can evaluate the canonical tool name and structured arguments. For tools
+whose target is supplied by the model, keep the URL or recipient in those arguments.
 
 After the tool runs, you can check its **output** before feeding it back to the
 model — this catches exfiltration and prompt-injection in returned data:
@@ -363,8 +362,8 @@ You might look for a way to *filter* which tools or components are protected (a
 
 Protection in Go is applied **per call**, so scoping is simply *which calls you
 guard*. To leave a tool ungoverned, don't wrap it in a `CheckToolCall`; to give a
-high-risk tool stricter treatment, pass a distinct `destDomain` (or a
-purpose-built session) so server-side policy can target it. There's no hidden
+high-risk tool stricter treatment, give it a distinct tool identity so
+server-side policy can target it. There's no hidden
 auto-instrumentation to opt out of — the governance boundary is exactly the set
 of `WrapRoundTripper` transports and `Check*` calls you write.
 
@@ -372,7 +371,7 @@ of `WrapRoundTripper` transports and `Check*` calls you write.
 // Governed: the model call and the payment tool.
 hc := &http.Client{Transport: guard.WrapRoundTripper(http.DefaultTransport)}
 // ...
-if _, err := guard.CheckToolCall(ctx, session, "charge_card", args, "api.stripe.com"); err != nil {
+if _, err := guard.CheckToolCall(ctx, session, "charge_card", args); err != nil {
     // handle deny
 }
 
@@ -380,7 +379,7 @@ if _, err := guard.CheckToolCall(ctx, session, "charge_card", args, "api.stripe.
 result := clock.Now() // no CheckToolCall — not part of the governance boundary
 ```
 
-Per-tool *policy* still lives server-side (keyed by tool name and destination);
+Per-tool *policy* still lives server-side (keyed by canonical tool or MCP identity);
 the client's job is only to decide what to submit for a decision.
 
 ---
@@ -826,7 +825,7 @@ func WithFailMode(fm FailMode) Option
 
 ```go
 func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error)
-func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, args any, destDomain string) (Decision, error)
+func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, args any) (Decision, error)
 func (g *Guard) CheckToolResponse(ctx context.Context, session, toolName string, result any) (Decision, error)
 func (g *Guard) CheckModelResponse(ctx context.Context, session, model, text string) (Decision, error)
 func (g *Guard) WrapRoundTripper(base http.RoundTripper, opts ...WrapOption) http.RoundTripper

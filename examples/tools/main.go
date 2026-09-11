@@ -3,7 +3,7 @@
 
 // Command tools is a flyedge-governed Anthropic tool-use agent. Claude may request a `fetch_url`
 // tool; the agent runs guard.CheckToolCall (the tool_call stage) BEFORE executing it, so policy can
-// allow or DENY the tool invocation — e.g. deny egress to an external destination. This governs the
+// allow or DENY the tool invocation based on the tool identity and arguments. This governs the
 // action the model wants to take, not just the prompt.
 //
 // The model call itself is governed by the transport wrap (pre_llm), and each tool call is gated
@@ -111,14 +111,10 @@ func runGuardedTool(ctx context.Context, guard *flyedge.Guard, tu anthropic.Tool
 		URL string `json:"url"`
 	}
 	_ = json.Unmarshal(tu.Input, &args)
-	dest := ""
-	if u, err := url.Parse(args.URL); err == nil {
-		dest = u.Host
-	}
-	fmt.Printf("→ tool_call: %s(url=%s) dest=%s\n", tu.Name, args.URL, dest)
+	fmt.Printf("→ tool_call: %s(url=%s)\n", tu.Name, args.URL)
 
 	// The gate: policy decides whether this tool invocation is allowed.
-	if _, err := guard.CheckToolCall(ctx, session, tu.Name, string(tu.Input), dest); err != nil {
+	if _, err := guard.CheckToolCall(ctx, session, tu.Name, string(tu.Input)); err != nil {
 		if de, ok := flyedge.AsDenyError(err); ok {
 			fmt.Printf("  DENIED by policy: %s — tool NOT executed\n", de.Decision.Reason)
 			return anthropic.NewToolResultBlock(tu.ID, "blocked by security policy: "+de.Decision.Reason, true)

@@ -132,11 +132,11 @@ to act on:
 
 - **alice** (plan `pro`) and **bob** (plan `free`) — their plan rides in the OBO
   `Scope`, so a policy can deny `send_payment` for free-plan users only.
-- `get_profile` — a benign local tool (no destination).
-- `send_payment` — destination service `payments`; its confirmation deliberately
+- `get_profile` — a benign local tool.
+- `send_payment` — its confirmation deliberately
   contains a credential-shaped `auth_token=...` for the tool_call_response stage to
   catch.
-- `fetch_url` — destination = the URL's host, for egress allow/deny policy.
+- `fetch_url` — its URL remains in structured tool arguments for policy evaluation.
 
 ## Test a custom control end to end
 

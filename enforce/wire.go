@@ -123,7 +123,6 @@ type Operation struct {
 	// the inspected/hashed payload + preview; this is the structured args for policy.
 	ToolArgsJSON string `json:"tool_args_json,omitempty"`
 	ModelID      string `json:"model_id,omitempty"`
-	DestDomain   string `json:"dest_domain,omitempty"`
 	MCPServerID  string `json:"mcp_server_id,omitempty"`
 }
 

@@ -8,15 +8,16 @@
 //
 // It governs the two stages that matter for a first integration:
 //   - pre_llm:   guard.WrapRoundTripper installs ONE governed http.Client, so the
-//                model call is checked before it leaves the process.
+//     model call is checked before it leaves the process.
 //   - tool_call: guard.CheckToolCall runs BEFORE the tool executes, so policy can
-//                allow / warn / deny the action.
+//     allow / warn / deny the action.
 //
 // Env:
-//   COMPFLY_API_URL                 prism base (e.g. http://localhost:8080)
-//   COMPFLY_AGENT_DID               the agent's DID (MCP-minted)
-//   COMPFLY_AGENT_PRIVATE_KEY_PATH  Ed25519 PEM
-//   ANTHROPIC_API_KEY               Claude key
+//
+//	COMPFLY_API_URL                 prism base (e.g. http://localhost:8080)
+//	COMPFLY_AGENT_DID               the agent's DID (MCP-minted)
+//	COMPFLY_AGENT_PRIVATE_KEY_PATH  Ed25519 PEM
+//	ANTHROPIC_API_KEY               Claude key
 package main
 
 import (
@@ -94,7 +95,7 @@ func run() error {
 		if tu.Name == "" {
 			continue
 		}
-		if _, err := guard.CheckToolCall(sctx, session, tu.Name, string(tu.Input), "api.weather.com"); err != nil {
+		if _, err := guard.CheckToolCall(sctx, session, tu.Name, string(tu.Input)); err != nil {
 			if ke, ok := flyedge.AsKillSwitchError(err); ok {
 				return fmt.Errorf("kill switch: %s", ke.Error())
 			}
