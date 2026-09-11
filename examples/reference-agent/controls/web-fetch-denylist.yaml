@@ -1,6 +1,6 @@
 # Web Fetch Destination Denylist — the custom control used in this example's README demo.
 #
-# It denies any web-fetch tool call whose destination domain is on a configured denylist,
+# It denies any web-fetch tool call whose URL contains a configured denied domain,
 # BEFORE the tool executes (the tool_call stage). Applied to this agent, it blocks
 # `fetch_url` calls to pastebin.com while every other domain still fetches.
 #
@@ -21,13 +21,13 @@ control:
     org/agent-configured denylist.
   stages: [tool_call]
   defaultAction: allow
-  # CEL evaluated by the policy enforcer per tool call. `tool_name` and `dest_domain`
-  # come from the SDK's CheckToolCall(ctx, session, name, args, destDomain);
-  # `config.*` comes from the per-agent overlay set below.
+  # CEL evaluated by the policy enforcer per tool call. `tool_name` and `tool_args`
+  # come from the SDK's CheckToolCall(ctx, session, name, args); `config.*` comes
+  # from the per-agent overlay set below.
   expression: >-
     (has(config.webFetchTools) && tool_name in config.webFetchTools &&
-     has(config.deniedDomains) && size(dest_domain) > 0 &&
-     config.deniedDomains.exists(d, dest_domain.contains(d)))
+     has(config.deniedDomains) && has(tool_args.url) &&
+     config.deniedDomains.exists(d, string(tool_args.url).contains(string(d))))
     ? {"triggered": true, "action": "deny", "reason": "web_fetch_denied_domain"}
     : {"triggered": false, "action": "allow", "reason": "ok"}
   configurableFields:
