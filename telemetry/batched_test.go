@@ -238,3 +238,25 @@ func TestWireCarriesTracePlacement(t *testing.T) {
 		}
 	}
 }
+
+func TestCallErrorsSurviveCloudSerialization(t *testing.T) {
+	for _, typ := range []string{EventLLMIO, EventToolIO} {
+		data := map[string]any{"turn_id": "native-turn", "error": "stale"}
+		events := toOtelEvents([]Event{{Type: typ, Err: "failed", Data: data}})
+		payload, err := json.Marshal(events[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire map[string]any
+		if err := json.Unmarshal(payload, &wire); err != nil {
+			t.Fatal(err)
+		}
+		got := wire["data"].(map[string]any)
+		if got["error"] != "failed" || got["turn_id"] != "native-turn" {
+			t.Fatalf("lost error metadata: %s", payload)
+		}
+		if data["error"] != "stale" {
+			t.Fatal("mutated caller metadata")
+		}
+	}
+}

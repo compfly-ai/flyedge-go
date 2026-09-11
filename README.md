@@ -152,3 +152,18 @@ Runnable programs in [`examples/`](examples/), each with its own README:
 ## License
 
 [Apache-2.0](./LICENSE). See [NOTICE](./NOTICE) for attribution.
+
+### Observed call telemetry
+
+`RecordLLMCallDetail` accepts optional request/response content, framework identity,
+operation (defaults to `chat`), and `Data` metadata. Callers can preserve native
+turn IDs, finish reasons, or content truncation indicators in `Data`. When a
+subagent is supplied, the SDK reserves `delegated`, `subagent_id`, and
+`subagent_type` for delegation attribution.
+
+`RecordToolIODetail` accepts arguments/results and observed execution duration
+in `LatencyMS`. Both call types accept `Err` for execution failures; cloud
+telemetry carries it in the reserved `data.error` key. These failures do not
+count as policy checks. Metadata is retained by ingestion, but dedicated UI
+columns require consumer support. Callers choose which content to capture and
+must populate these optional fields; the SDK does not collect it automatically.

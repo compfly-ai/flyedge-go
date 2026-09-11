@@ -152,3 +152,21 @@ func TestRecordLLMCallDetailCarriesContent(t *testing.T) {
 		t.Fatalf("content lost: %+v", tel.events)
 	}
 }
+
+func TestCallDetailsPreserveMetadataAndErrors(t *testing.T) {
+	tel := &captureTelemetry{}
+	g := &Guard{tel: tel}
+	data := map[string]any{"turn_id": "native-turn", "delegated": false}
+	g.RecordLLMCallDetail(LLMCall{AgentFramework: "codex", Operation: "responses", Data: data, Err: "upstream failed", AgentID: "child"})
+	ev := tel.events[0]
+	if ev.AgentFramework != "codex" || ev.Operation != "responses" || ev.Err != "upstream failed" || ev.Data["turn_id"] != "native-turn" || ev.Data["delegated"] != true {
+		t.Fatalf("lost call details: %+v", ev)
+	}
+	if data["delegated"] != false {
+		t.Fatal("mutated caller metadata")
+	}
+	g.RecordToolIODetail(ToolIO{LatencyMS: 125, Err: "command failed"})
+	if ev := tel.events[1]; ev.LatencyMS != 125 || ev.Err != "command failed" {
+		t.Fatalf("lost tool outcome: %+v", ev)
+	}
+}
