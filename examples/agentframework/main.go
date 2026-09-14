@@ -44,13 +44,12 @@ type weatherArgs struct {
 // boundaries. Embedding keeps its schema and provider-facing metadata unchanged.
 type governedTool struct {
 	tool.FuncTool
-	guard      *flyedge.Guard
-	sessionID  string
-	destDomain string
+	guard     *flyedge.Guard
+	sessionID string
 }
 
 func (t governedTool) Call(ctx context.Context, args string) (any, error) {
-	if _, err := t.guard.CheckToolCall(ctx, t.sessionID, t.Name(), args, t.destDomain); err != nil {
+	if _, err := t.guard.CheckToolCall(ctx, t.sessionID, t.Name(), args); err != nil {
 		return nil, err
 	}
 
@@ -105,10 +104,9 @@ func run() error {
 		Config: agent.Config{
 			Name: "CompFly weather assistant",
 			Tools: []tool.Tool{governedTool{
-				FuncTool:   weather,
-				guard:      guard,
-				sessionID:  sessionID,
-				destDomain: "weather.example.com",
+				FuncTool:  weather,
+				guard:     guard,
+				sessionID: sessionID,
 			}},
 		},
 	})

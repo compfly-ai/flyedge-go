@@ -60,7 +60,7 @@ func TestLiveConformance(t *testing.T) {
 		Provider:   "openai",
 		OriginType: flyedge.OriginTypeUser,
 		Content:    flyedge.Content{Preview: "what are your hours?", Full: "what are your hours?"},
-		Operation:  flyedge.Operation{Type: "chat.completions", ModelID: "gpt-4o", DestDomain: "api.openai.com"},
+		Operation:  flyedge.Operation{Type: "chat.completions", ModelID: "gpt-4o"},
 		ExecutionContext: &flyedge.ExecutionContext{
 			Environment: "dev", IsAutonomous: false, TriggerType: "user_message",
 		},

@@ -12,10 +12,9 @@ import (
 // happen in the caller's own loop, so these helpers make governing the tool_call and post_llm
 // stages a one-liner — the explicit gate for tool execution and response inspection.
 
-// CheckToolCall gates a tool invocation (the tool_call stage): run it before executing a tool so
-// policy can allow/deny the call (e.g. deny egress to an external destination). args is serialized
-// as the inspected content; destDomain is the tool's target (host/service) if it has one.
-func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, args any, destDomain string) (Decision, error) {
+// CheckToolCall gates a tool invocation (the tool_call stage). Tool arguments are serialized both
+// as inspected content and as structured policy input.
+func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, args any) (Decision, error) {
 	return g.Check(ctx, CheckRequest{
 		SessionID:     session,
 		Stage:         StageToolCall,
@@ -23,7 +22,7 @@ func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, arg
 		ComponentName: toolName,
 		MethodName:    "call",
 		Content:       Content{Full: jsonString(args)},
-		Operation:     Operation{Type: "tool.call", ToolName: toolName, DestDomain: destDomain, ToolArgsJSON: jsonString(args)},
+		Operation:     Operation{Type: "tool.call", ToolName: toolName, ToolArgsJSON: jsonString(args)},
 	})
 }
 

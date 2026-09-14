@@ -7,8 +7,8 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"strings"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +45,7 @@ func TestLiveCheck(t *testing.T) {
 		SessionID: "go-live",
 		Stage:     flyedge.StagePreLLM,
 		Content:   flyedge.Content{Preview: "what are your hours?", Full: "what are your hours?", SizeBytes: 20},
-		Operation: flyedge.Operation{Type: "chat.completions", ModelID: "gpt-4o", DestDomain: "api.openai.com"},
+		Operation: flyedge.Operation{Type: "chat.completions", ModelID: "gpt-4o"},
 	}
 	dec, err := g.Check(ctx, benign)
 	// The checkpoint is about SIGNATURE ACCEPTANCE: a 401/invalid-signature would surface as an

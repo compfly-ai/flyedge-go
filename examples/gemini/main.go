@@ -8,13 +8,14 @@
 // demonstrates the tool_call stage explicitly with guard.CheckToolCall.
 //
 // Env:
-//   COMPFLY_API_URL               prism base (e.g. http://localhost:8080; defaults to prod)
-//   COMPFLY_AGENT_DID             the agent's DID (MCP-minted; optional — checks fail open without it)
-//   COMPFLY_AGENT_PRIVATE_KEY_PATH  Ed25519 PEM
-//   FLYEDGE_MODE                  enforce|warn (default warn)
-//   GEMINI_API_KEY                required for a real model call
-//   MODEL                         Gemini model id (default gemini-3.6-flash)
-//   PROMPT                        the user prompt (default: a benign question)
+//
+//	COMPFLY_API_URL               prism base (e.g. http://localhost:8080; defaults to prod)
+//	COMPFLY_AGENT_DID             the agent's DID (MCP-minted; optional — checks fail open without it)
+//	COMPFLY_AGENT_PRIVATE_KEY_PATH  Ed25519 PEM
+//	FLYEDGE_MODE                  enforce|warn (default warn)
+//	GEMINI_API_KEY                required for a real model call
+//	MODEL                         Gemini model id (default gemini-3.6-flash)
+//	PROMPT                        the user prompt (default: a benign question)
 package main
 
 import (
@@ -76,7 +77,7 @@ func run() error {
 	}
 
 	// 4. The tool_call stage is governed explicitly, before you execute a tool the model asked for.
-	dec, err := guard.CheckToolCall(ctx, "gemini-demo", "get_weather", map[string]any{"city": "Paris"}, "api.weather.com")
+	dec, err := guard.CheckToolCall(ctx, "gemini-demo", "get_weather", map[string]any{"city": "Paris"})
 	if err != nil {
 		if de, ok := flyedge.AsDenyError(err); ok {
 			fmt.Printf("tool get_weather denied: %s\n", de.Decision.Reason)

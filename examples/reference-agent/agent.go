@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 
 	"github.com/compfly-ai/flyedge-go"
 )
@@ -85,7 +84,7 @@ func (a *agent) guardedTool(ctx context.Context, session string, u *user, name s
 	gov(dim, "→ tool_call: %s %s", name, string(args))
 
 	// Gate 1 — tool_call, BEFORE execution.
-	dec, err := a.guard.CheckToolCall(ctx, session, name, string(args), def.dest(args))
+	dec, err := a.guard.CheckToolCall(ctx, session, name, string(args))
 	if err != nil {
 		if de, ok := flyedge.AsDenyError(err); ok {
 			gov(red, "  🛡  DENIED: %s — not executed", de.Decision.Reason)
@@ -185,13 +184,11 @@ func systemPrompt(u *user) string {
 
 // --- the agent's tools -------------------------------------------------------------------------
 
-// toolDef is one mock tool: a provider-neutral schema for the model, a dest for the tool_call
-// policy (a service name or external host — empty for purely local tools), and the implementation.
+// toolDef is one mock tool: a provider-neutral schema for the model and the implementation.
 type toolDef struct {
 	name, description string
 	properties        map[string]any
 	required          []string
-	dest              func(args json.RawMessage) string
 	run               func(u *user, args json.RawMessage) string
 }
 
@@ -200,7 +197,6 @@ var toolDefs = []toolDef{
 		name:        "get_profile",
 		description: "Get the acting user's profile: name, email, plan.",
 		properties:  map[string]any{},
-		dest:        func(json.RawMessage) string { return "" },
 		run: func(u *user, _ json.RawMessage) string {
 			return fmt.Sprintf("name=%s email=%s plan=%s", u.Name, u.Email, u.Plan)
 		},
@@ -213,8 +209,6 @@ var toolDefs = []toolDef{
 			"amount_usd": map[string]any{"type": "number", "description": "amount in USD"},
 		},
 		required: []string{"to", "amount_usd"},
-		// The dest names the SERVICE the tool touches — what a service-destination policy matches.
-		dest: func(json.RawMessage) string { return "payments" },
 		run: func(u *user, args json.RawMessage) string {
 			a := argMap(args)
 			// The confirmation deliberately carries a credential-shaped token: material a
@@ -230,14 +224,6 @@ var toolDefs = []toolDef{
 			"url": map[string]any{"type": "string", "description": "the URL to fetch"},
 		},
 		required: []string{"url"},
-		// The dest is the external HOST — what an egress policy allows or denies.
-		dest: func(args json.RawMessage) string {
-			raw, _ := argMap(args)["url"].(string)
-			if p, err := url.Parse(raw); err == nil {
-				return p.Host
-			}
-			return ""
-		},
 		run: func(_ *user, args json.RawMessage) string {
 			// Only reached when policy ALLOWED the egress; a demo needs no real network call.
 			return fmt.Sprintf("(fetched %v: 3 offers — 20%% off shipping, free returns, 2-for-1 coffee)",

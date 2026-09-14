@@ -142,7 +142,7 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		ComponentName: req.URL.Host,
 		MethodName:    "http",
 		Content:       Content{Full: prompt},
-		Operation:     Operation{Type: "chat.completions", ModelID: model, DestDomain: req.URL.Host},
+		Operation:     Operation{Type: "chat.completions", ModelID: model},
 	})
 	if err != nil {
 		return nil, err // Deny/*DenyError → the SDK call fails; provider not contacted

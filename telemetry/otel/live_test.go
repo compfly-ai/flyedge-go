@@ -40,7 +40,7 @@ func TestLiveOTelExportsRealChecks(t *testing.T) {
 		SessionID: "otel-live", Stage: flyedge.StagePreLLM,
 		ComponentType: "LLM", ComponentName: "api.anthropic.com", MethodName: "http",
 		Content:   flyedge.Content{Full: "What is the capital of France?"},
-		Operation: flyedge.Operation{Type: "chat.completions", ModelID: "claude-haiku-4-5", DestDomain: "api.anthropic.com"},
+		Operation: flyedge.Operation{Type: "chat.completions", ModelID: "claude-haiku-4-5"},
 	})
 	// Tool call to an external service — the local policy denies external_service access, so this
 	// exercises the deny path and its span. (If policy allows it, the span still asserts fine.)
@@ -48,7 +48,7 @@ func TestLiveOTelExportsRealChecks(t *testing.T) {
 		SessionID: "otel-live", Stage: flyedge.StageToolCall,
 		ComponentType: "TOOL", ComponentName: "fetch_url", MethodName: "call",
 		Content:   flyedge.Content{Full: "fetch https://example.com"},
-		Operation: flyedge.Operation{Type: "tool_call", ToolName: "fetch_url", DestDomain: "example.com"},
+		Operation: flyedge.Operation{Type: "tool_call", ToolName: "fetch_url"},
 	})
 
 	tp.ForceFlush(ctx)
