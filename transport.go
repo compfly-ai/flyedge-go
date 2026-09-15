@@ -30,7 +30,7 @@ func (g *Guard) WrapRoundTripper(base http.RoundTripper, opts ...WrapOption) htt
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	rt := &guardRoundTripper{guard: g, base: base, session: "sess-" + randHex()}
+	rt := &guardRoundTripper{guard: g, base: base, checkResponse: true, session: "sess-" + randHex()}
 	for _, o := range opts {
 		o(rt)
 	}
@@ -163,7 +163,7 @@ func (t *guardRoundTripper) inspectResponse(req *http.Request, resp *http.Respon
 	host := req.URL.Host
 
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		ctx := req.Context()
+		ctx := WithVerdictRelay(req.Context(), "stream_delivered")
 		resp.Body = newStreamMonitor(resp.Body, host, func(completion string) {
 			if completion != "" {
 				_, _ = t.guard.CheckModelResponse(ctx, session, model, completion) // record/audit

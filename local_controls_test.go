@@ -112,10 +112,9 @@ func TestCheck_LocalWarningRidesAlongWithTheServerDecision(t *testing.T) {
 	}
 }
 
-// ModeOff is checked before local evaluation, matching the documented contract that it is a purely
-// local "do nothing" posture.
-func TestCheck_GuardModeOffSkipsLocalControlsToo(t *testing.T) {
-	enf := &countingEnforcer{}
+// ModeOff disables legacy local detectors but does not skip the platform check.
+func TestCheck_GuardModeOffSkipsLocalControlsButCallsPlatform(t *testing.T) {
+	enf := &countingEnforcer{dec: enforce.Decision{Action: ActionAllow}}
 	g, err := New(Config{Mode: ModeOff},
 		WithEnforcer(enf), mustLocal(t, localcontrol.Config{Mode: localcontrol.ModeEnforce}))
 	if err != nil {
@@ -124,11 +123,11 @@ func TestCheck_GuardModeOffSkipsLocalControlsToo(t *testing.T) {
 	t.Cleanup(func() { _ = g.Close() })
 
 	dec, err := g.Check(context.Background(), sqlCall("DROP TABLE users"))
-	if err != nil || dec.Action != ActionAllow || dec.Reason != "mode_off" {
-		t.Errorf("got %q/%q/%v, want allow/mode_off/nil", dec.Action, dec.Reason, err)
+	if err != nil || dec.Action != ActionAllow {
+		t.Errorf("got %q/%q/%v, want platform allow", dec.Action, dec.Reason, err)
 	}
-	if enf.calls != 0 {
-		t.Errorf("server called %d times in mode off; want 0", enf.calls)
+	if enf.calls != 1 {
+		t.Errorf("server called %d times in mode off; want 1", enf.calls)
 	}
 }
 
