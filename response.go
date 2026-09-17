@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// Response-side (post_llm) inspection for the transport wrap. Opt in with WithResponseCheck.
+// Response-side (post_llm) inspection is enabled by default for the transport wrap.
 //
 // Non-streaming responses can be BLOCKED: the wrap buffers the completion, runs a post_llm check,
 // and returns a *DenyError instead of the response on a deny (the model already generated it, but
@@ -24,7 +24,7 @@ import (
 type WrapOption func(*guardRoundTripper)
 
 // WithResponseCheck enables a post_llm policy check on model responses (block for non-streaming,
-// monitor for streaming). Off by default — request-side (pre_llm) checking is always on.
+// monitor for streaming). Enabled by default; retained for source compatibility.
 func WithResponseCheck() WrapOption {
 	return func(rt *guardRoundTripper) { rt.checkResponse = true }
 }

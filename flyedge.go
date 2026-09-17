@@ -188,19 +188,9 @@ func randID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Check runs a request through the policy decision point and returns the typed Decision. Behavior by
-// Mode: ModeOff short-circuits to allow WITHOUT calling the server; otherwise the server is called and
-// a deny/kill ALWAYS enforces (returns *DenyError / *KillSwitchError) regardless of Mode. An advisory
-// server `warn` blocks only in ModeEnforce (returned as deny + *DenyError); in Warn/Audit it returns
-// (Decision{Action:Warn}, nil) for the caller to record, not block. On an enforcement-call failure it
-// honors FailMode: FailOpen → allow + nil error; FailClosed → deny + *DenyError.
+// Check applies platform decisions unchanged. Mode is retained only for legacy
+// SDK-local detectors and never skips, weakens, or escalates a platform result.
 func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
-	// ModeOff is a purely local posture: skip the policy check entirely (local dev), no network call.
-	// Server deny/kill can't apply because we never ask — this is the one Mode that doesn't enforce.
-	if g.cfg.Mode == ModeOff {
-		return Decision{Action: ActionAllow, Reason: "mode_off"}, nil
-	}
-
 	// Default correlation ids once, so every gate — including the manual
 	// CheckToolCall/CheckToolResponse/CheckModelResponse helpers, not just the
 	// transport wrap — carries a request_id into /check and telemetry. SessionID
@@ -265,11 +255,15 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	}
 
 	// Local controls run before the round trip: an unambiguous local block is both faster and
-	// available offline. It can only ADD a no — an allow here falls through to the server, which
-	// remains authoritative. A local warning is carried into the server's decision rather than
-	// dropped.
+	// available offline. It can only add a no; an allow here falls through to the server, which
+	// remains authoritative. A local warning is carried into the server's decision.
 	tr := traceIDs{traceID: traceID, spanID: spanID, parentSpan: parentSpan}
-	localDec, localWarnings, localBlocked := g.evaluateLocal(req)
+	var localDec Decision
+	var localWarnings []string
+	var localBlocked bool
+	if g.cfg.Mode != ModeOff {
+		localDec, localWarnings, localBlocked = g.evaluateLocal(req)
+	}
 	if localBlocked {
 		g.recordLocalBlock(req, localDec, tr)
 		return localDec, &DenyError{Decision: localDec}
@@ -309,15 +303,6 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	case dec.Action == ActionDeny:
 		result = dec
 		retErr = &DenyError{Decision: dec}
-	case dec.Action == ActionWarn && g.cfg.Mode == ModeEnforce:
-		// Mode posture: ModeEnforce treats an advisory server `warn` as blocking. In Warn/Audit the
-		// warn stays advisory (falls through to the default and is returned without an error).
-		result = dec
-		result.Action = ActionDeny
-		if result.Reason == "" {
-			result.Reason = "warn_enforced"
-		}
-		retErr = &DenyError{Decision: result}
 	default:
 		result = dec
 	}
@@ -330,6 +315,11 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 
 	ev.Action = string(result.Action)
 	ev.Reason = result.Reason
+	ev.Data = map[string]any{
+		"decision": string(result.Action),
+		"stage":    string(req.Stage),
+		"relay":    verdictRelay(ctx),
+	}
 	g.tel.Record(ev)
 	return result, retErr
 }

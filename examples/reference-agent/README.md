@@ -117,10 +117,9 @@ verify_agent_endpoint(id=<your-slug>, prompt="What tools do you have?")
 
 Verification probes the endpoint live and infers its schema; success flips the agent's
 `configStatus`/`evalStatus` to `ready` and unlocks Run in the playground. Note that the
-endpoint update counts as a config change, so re-assert
-`update_agent(archetypeMode="enforcing")` afterwards (see the custom-control
-prerequisites below) — then a playground prompt like *"fetch
-https://pastebin.com/raw/x"* gets denied by the example control, live.
+endpoint update does not change control enforcement. A playground prompt like *"fetch
+https://pastebin.com/raw/x"* gets denied whenever the example control is enabled with
+`action: deny`.
 
 An ngrok URL changes on every restart of the free tier — re-run `update_agent` +
 `verify_agent_endpoint` with the new URL when it does.
@@ -151,14 +150,10 @@ assistant:
 > to my agent: define the control template, then set it on my agent's overlay with the
 > config in the `apply:` section.
 
-Two prerequisites for the deny to actually fire:
-
-1. The agent must be **enforcing**: run `enable_agent_enforcement(<your-slug>)` once,
-   then `update_agent(id=<your-slug>, archetypeMode="enforcing")`. A newly registered
-   agent starts in learning mode, which observes but never blocks.
-2. Set enforcing mode **after** your control changes — a policy publish can put the
-   agent back into a learning window. If a control you just added doesn't fire, re-set
-   `archetypeMode` to `learning` and back to `enforcing`, then retry.
+The deny fires as soon as the control is assigned with `enabled: true` and
+`action: deny`. There is no agent-level learning or enforcement mode. Use `warn` for
+allow-with-guidance behavior and `audit` for an evaluated, recorded trigger that is
+not surfaced to the agent.
 
 Then run the demo and watch the gate:
 
