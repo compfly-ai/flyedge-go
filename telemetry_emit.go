@@ -169,6 +169,14 @@ type ToolIO struct {
 	// an email). Optional — empty leaves the record unattributed.
 	UserID string
 
+	// Delegation, for a tool call made by a subagent rather than by the agent's main loop. A
+	// subagent runs inside its parent and reports the parent's SessionID, so without these its
+	// tool use is indistinguishable from the parent's own. AgentID names the subagent;
+	// ComponentName carries its type when the host reports one. Both optional — a main-loop call
+	// leaves them empty and emits exactly as before. Mirrors LLMCall's delegation fields.
+	AgentID       string
+	ComponentName string
+
 	ArgsJSON   string
 	ResultJSON string
 
@@ -197,6 +205,26 @@ func (g *Guard) RecordToolIODetail(c ToolIO) {
 	if g == nil || g.tel == nil {
 		return
 	}
+	data := c.Data
+	// A delegated tool call is attributed to the subagent that made it. The subagent id and type
+	// ride the data map, exactly as RecordLLMCallDetail carries them, so the platform can split a
+	// session's own tool use from its subagents' without a schema change.
+	if c.AgentID != "" {
+		if data == nil {
+			data = make(map[string]any)
+		} else {
+			clone := make(map[string]any, len(data)+2)
+			for k, v := range data {
+				clone[k] = v
+			}
+			data = clone
+		}
+		data["delegated"] = true
+		data["subagent_id"] = c.AgentID
+		if c.ComponentName != "" {
+			data["subagent_type"] = c.ComponentName
+		}
+	}
 	g.tel.Record(telemetry.Event{
 		Type: telemetry.EventToolIO, SessionID: c.SessionID, RequestID: c.RequestID,
 		LatencyMS: c.LatencyMS, Err: c.Err,
@@ -204,7 +232,7 @@ func (g *Guard) RecordToolIODetail(c ToolIO) {
 		TraceID: c.TraceID, SpanID: c.SpanID, ParentSpanID: c.ParentSpanID,
 		Name: c.ToolName, Operation: "tool.call",
 		AgentFramework: c.AgentFramework,
-		RequestFull:    c.ArgsJSON, ResponseFull: c.ResultJSON, Data: c.Data,
+		RequestFull:    c.ArgsJSON, ResponseFull: c.ResultJSON, Data: data,
 		OccurredAt: orNow(c.OccurredAt),
 	})
 }
