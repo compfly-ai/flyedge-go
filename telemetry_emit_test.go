@@ -144,6 +144,35 @@ func TestRecordToolIODetailCarriesTracePlacementAndTime(t *testing.T) {
 	}
 }
 
+func TestRecordToolIODetailAttributesSubagent(t *testing.T) {
+	tel := &captureTelemetry{}
+	g := &Guard{tel: tel}
+	caller := map[string]any{"lifecycle": "completed"}
+
+	g.RecordToolIODetail(ToolIO{
+		SessionID: "parent", ToolName: "Bash",
+		AgentID: "child-1", ComponentName: "subagent: Boyle",
+		Data: caller,
+	})
+
+	ev := tel.events[0]
+	if ev.Data["delegated"] != true || ev.Data["subagent_id"] != "child-1" || ev.Data["subagent_type"] != "subagent: Boyle" {
+		t.Fatalf("subagent not attributed on tool_io: %+v", ev.Data)
+	}
+	if ev.Data["lifecycle"] != "completed" {
+		t.Fatalf("caller data lost: %+v", ev.Data)
+	}
+	if _, mutated := caller["subagent_id"]; mutated {
+		t.Fatal("mutated caller data map")
+	}
+
+	// A main-loop tool call carries no subagent id and emits as before.
+	g.RecordToolIODetail(ToolIO{SessionID: "parent", ToolName: "Bash"})
+	if _, ok := tel.events[1].Data["delegated"]; ok {
+		t.Fatalf("non-delegated tool_io marked delegated: %+v", tel.events[1].Data)
+	}
+}
+
 func TestRecordLLMCallDetailCarriesContent(t *testing.T) {
 	tel := &captureTelemetry{}
 	g := &Guard{tel: tel}
