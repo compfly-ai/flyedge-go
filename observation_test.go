@@ -44,3 +44,37 @@ func TestUsageObservationRejectsInvalidKindAndMissingName(t *testing.T) {
 	var nilGuard *Guard
 	nilGuard.RecordUsageObservation(UsageObservation{Kind: "skill", Name: "x", SessionID: "s"})
 }
+
+func TestTurnOutcomeCarriesOutcomeWithoutPolicy(t *testing.T) {
+	capture := &captureTelemetry{}
+	g := &Guard{tel: capture}
+	at := time.Date(2026, 10, 14, 18, 0, 0, 0, time.UTC)
+	g.RecordTurnOutcome(TurnOutcome{SessionID: "session", RequestID: "turn", TraceID: "trace", EndpointID: "endpoint", InstanceKey: "instance", UserID: "user", AgentFramework: "cursor", Err: "model unavailable", OccurredAt: at, Data: map[string]any{"execution_status": "failed"}})
+	if len(capture.events) != 1 {
+		t.Fatalf("events: %+v", capture.events)
+	}
+	e := capture.events[0]
+	if e.Type != telemetry.EventTurnOutcome || e.SessionID != "session" || e.RequestID != "turn" || e.TraceID != "trace" || e.InstanceKey != "instance" || e.Err != "model unavailable" || e.Data["execution_status"] != "failed" || !e.OccurredAt.Equal(at) {
+		t.Fatalf("turn outcome lost fields: %+v", e)
+	}
+	if e.Action != "" || e.Stage != "" {
+		t.Fatalf("turn outcome fabricated enforcement: %+v", e)
+	}
+	sink := telemetry.NewRecorder()
+	sink.Record(e)
+	if sink.Report().Checks != 0 {
+		t.Fatal("turn outcome counted as policy check")
+	}
+}
+
+func TestTurnOutcomeRejectsMissingSessionOrData(t *testing.T) {
+	capture := &captureTelemetry{}
+	g := &Guard{tel: capture}
+	g.RecordTurnOutcome(TurnOutcome{Data: map[string]any{"execution_status": "failed"}})
+	g.RecordTurnOutcome(TurnOutcome{SessionID: "session"})
+	if len(capture.events) != 0 {
+		t.Fatalf("invalid outcomes shipped: %+v", capture.events)
+	}
+	var nilGuard *Guard
+	nilGuard.RecordTurnOutcome(TurnOutcome{SessionID: "s", Data: map[string]any{"x": 1}})
+}

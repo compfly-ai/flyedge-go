@@ -22,6 +22,7 @@ const (
 	EventToolIO         = "tool_io"          // a tool call: name/args/result
 	EventSessionStart   = "session_start"    // agent session opened
 	EventSessionSummary = "session_summary"  // agent session ended (rolled-up stats in Data)
+	EventTurnOutcome    = "turn_outcome"     // how a whole turn ended when no single call can be named
 )
 
 // Event is one telemetry record. For a policy check (the default — Type=="" or
