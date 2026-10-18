@@ -143,6 +143,55 @@ func TestRecordInactiveIsNoop(t *testing.T) {
 	}
 }
 
+// The eval starts its injection tiers on the first profile frame, which must be flagged profile_ready.
+func TestControllerSendsProfileReady(t *testing.T) {
+	msgs := make(chan string, 64)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		for {
+			_, data, err := c.Read(context.Background())
+			if err != nil {
+				return
+			}
+			select {
+			case msgs <- string(data):
+			default:
+			}
+		}
+	}))
+	defer srv.Close()
+
+	c := sim.New("flyedge-go/test")
+	c.SetManifest([]string{"grant_access"}, []string{"gpt-4.1-mini"})
+	c.OnConfigChange(&sim.Config{
+		Active:       true,
+		RunID:        "run-1",
+		Middlewares:  []string{"telemetry", "attack_injector"},
+		TelemetryJWT: "jwt-x",
+		TelemetryURL: "ws" + strings.TrimPrefix(srv.URL, "http"),
+	})
+	defer c.Stop()
+
+	c.Record(sim.RuntimeEvent{ComponentType: "tool", ComponentName: "grant_access", ToolName: "grant_access", ToolResult: "ok"},
+		sim.BehaviorInput{ComponentType: "tool", ComponentName: "grant_access"})
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		m := recv(t, msgs, 3*time.Second)
+		if !strings.Contains(m, `"agent_profile"`) {
+			continue
+		}
+		if !strings.Contains(m, `"flags":["profile_ready"]`) || !strings.Contains(m, `"prompt_id":"__system__"`) {
+			t.Fatalf("first profile frame is not a __system__ profile_ready frame: %s", m)
+		}
+		return
+	}
+	t.Fatal("did not receive the agent profile")
+}
+
 func recv(t *testing.T, ch chan string, d time.Duration) string {
 	t.Helper()
 	select {

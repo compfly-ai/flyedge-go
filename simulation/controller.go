@@ -334,7 +334,8 @@ func (c *Controller) Record(ev RuntimeEvent, bi BehaviorInput) {
 }
 
 // maybeEmitProfile streams an agent_profile RuntimeEvent when the profile is ready + has changed,
-// throttled to profileMinInterval (first ready profile goes out immediately).
+// throttled to profileMinInterval (first ready profile goes out immediately). The eval starts its
+// injection tiers on the first frame, flagged profile_ready; later frames are profile_update.
 func (c *Controller) maybeEmitProfile(prof *profiler) {
 	if !prof.isReady() || !prof.isDirty() {
 		return
@@ -345,6 +346,10 @@ func (c *Controller) maybeEmitProfile(prof *profiler) {
 	if tr == nil || (!c.lastProfile.IsZero() && time.Since(c.lastProfile) < profileMinInterval) {
 		c.mu.Unlock()
 		return
+	}
+	flag := "profile_update"
+	if c.lastProfile.IsZero() {
+		flag = "profile_ready"
 	}
 	c.lastProfile = time.Now()
 	c.mu.Unlock()
@@ -357,7 +362,7 @@ func (c *Controller) maybeEmitProfile(prof *profiler) {
 		ComponentType: "agent",
 		ComponentName: "flyedge",
 		Framework:     c.framework,
-		Flags:         []string{"agent_profile"},
+		Flags:         []string{flag},
 		AgentProfile:  prof.snapshot(),
 	}
 	if b, err := json.Marshal(&ev); err == nil {
