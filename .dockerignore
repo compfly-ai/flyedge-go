@@ -1,0 +1,7 @@
+.git
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/node_modules
+**/.local-build

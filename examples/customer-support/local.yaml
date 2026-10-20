@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-support-go
+  namespace: compfly-local
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: customer-support-go}
+  template:
+    metadata:
+      labels: {app: customer-support-go}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: customer-support-go
+          image: compfly/customer-support-go
+          ports: [{containerPort: 8096}]
+          env:
+            - {name: GOMEMLIMIT, value: 256MiB}
+            - {name: COMPFLY_API_URL, value: 'http://prism:8080'}
+            - name: COMPFLY_AGENT_DID
+              valueFrom: {secretKeyRef: {name: customer-support-go-identity, key: did}}
+            - {name: COMPFLY_AGENT_PRIVATE_KEY_PATH, value: '/identity/agent.pem'}
+            - name: OPENAI_API_KEY
+              valueFrom: {secretKeyRef: {name: agent-eval-openai, key: OPENAI_API_KEY}}
+          volumeMounts:
+            - {name: identity, mountPath: /identity, readOnly: true}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: '1', memory: 384Mi}
+          readinessProbe:
+            httpGet: {path: /health, port: 8096}
+            initialDelaySeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      volumes:
+        - name: identity
+          secret: {secretName: customer-support-go-identity, defaultMode: 0440}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-support-go
+  namespace: compfly-local
+spec:
+  selector: {app: customer-support-go}
+  ports: [{port: 8096, targetPort: 8096}]

@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strconv"
 	"time"
 )
@@ -107,10 +108,19 @@ type AuthContext struct {
 // the gateway and filled automatically from Full when unset (see CheckRequest.fillDefaults).
 // Preview is a short excerpt for logs.
 type Content struct {
-	Preview   string `json:"preview"`
-	Full      string `json:"full"`
-	Hash      string `json:"hash"`
-	SizeBytes int    `json:"size_bytes"`
+	Preview     string       `json:"preview"`
+	Full        string       `json:"full"`
+	Hash        string       `json:"hash"`
+	SizeBytes   int          `json:"size_bytes"`
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// Attachment carries inline media only on the signed policy request, never in text/audit previews.
+type Attachment struct {
+	ID         string         `json:"id"`
+	MediaType  string         `json:"media_type"`
+	DataBase64 string         `json:"data_base64"`
+	Oversize   map[string]any `json:"oversize,omitempty"`
 }
 
 // Operation describes what the agent is doing (chat completion, tool call, …).
@@ -146,7 +156,14 @@ func (r *CheckRequest) fillDefaults() {
 		r.Content.SizeBytes = len(r.Content.Full)
 	}
 	if r.Content.Hash == "" {
-		sum := sha256.Sum256([]byte(r.Content.Full))
+		identity := []byte(r.Content.Full)
+		if len(r.Content.Attachments) > 0 {
+			identity, _ = json.Marshal(struct {
+				Text        string
+				Attachments []Attachment
+			}{r.Content.Full, r.Content.Attachments})
+		}
+		sum := sha256.Sum256(identity)
 		r.Content.Hash = hex.EncodeToString(sum[:])
 	}
 	if r.Content.Preview == "" {
@@ -183,15 +200,16 @@ type KillInfo struct {
 
 // checkResponse is the raw /check response envelope.
 type checkResponse struct {
-	Decision       string     `json:"decision"`
-	Reason         string     `json:"reason"`
-	Message        string     `json:"message"`
-	Warnings       []string   `json:"warnings"`
-	PolicyVersion  string     `json:"policy_version"`
-	RequestID      string     `json:"request_id"`
-	SignalsPresent []string   `json:"signals_present"`
-	SignalsMissing []string   `json:"signals_missing"`
-	Kills          []KillInfo `json:"kills"`
+	Decision       string         `json:"decision"`
+	Reason         string         `json:"reason"`
+	Message        string         `json:"message"`
+	Warnings       []string       `json:"warnings"`
+	PolicyVersion  string         `json:"policy_version"`
+	RequestID      string         `json:"request_id"`
+	SignalsPresent []string       `json:"signals_present"`
+	SignalsMissing []string       `json:"signals_missing"`
+	Kills          []KillInfo     `json:"kills"`
+	Detail         map[string]any `json:"detail"`
 }
 
 // Decision is the typed, normalized result the caller sees.
@@ -204,6 +222,8 @@ type Decision struct {
 	RequestID     string
 	Signals       Signals
 	Kills         []KillInfo // non-full-scope kills matching this request (model/tool)
+	Detail        map[string]any
+	NontextStatus string
 }
 
 // Signals carries the capability signals the server reported present/missing (audit trail).
@@ -230,5 +250,6 @@ func (r checkResponse) normalize() Decision {
 		RequestID:     r.RequestID,
 		Signals:       Signals{Present: r.SignalsPresent, Missing: r.SignalsMissing},
 		Kills:         r.Kills,
+		Detail:        r.Detail,
 	}
 }
