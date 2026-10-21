@@ -82,7 +82,7 @@ func TestLiveLifecycle(t *testing.T) {
 
 	// connect: register a manifest (presence + seeding)
 	if err := g.Connect(ctx, flyedge.ManifestInfo{
-		Framework: "flyedge-go-test", Tools: []string{"fetch_url"}, Models: []string{"claude-haiku-4-5"}, Environment: "dev",
+		Framework: "flyedge-go-test", Tools: []string{"fetch_url"}, Models: []string{"claude-haiku-4-5"},
 	}); err != nil {
 		t.Fatalf("Connect (prism rejected the manifest?): %v", err)
 	}

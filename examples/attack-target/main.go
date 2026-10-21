@@ -58,10 +58,9 @@ func run() error {
 
 	ctx := context.Background()
 	if err := g.Connect(ctx, flyedge.ManifestInfo{
-		Framework:   "flyedge-go/attack-target",
-		Models:      []string{model},
-		Tools:       []string{"get_account", "checkout"},
-		Environment: "development",
+		Framework: "flyedge-go/attack-target",
+		Models:    []string{model},
+		Tools:     []string{"get_account", "checkout"},
 	}); err != nil {
 		return err
 	}

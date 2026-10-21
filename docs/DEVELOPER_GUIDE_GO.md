@@ -488,17 +488,17 @@ the gateway (prism's `/v1/proxy`) rather than checked out-of-band.
 ## Manifest Registration
 
 `Connect` registers the agent's manifest with the platform: its framework, the
-tools and models it uses, and its environment. This is what powers drift
-detection (the platform can flag when the running agent diverges from its
+tools and models it uses, and the platform it runs on (detected from well-known
+env vars, e.g. `aws_lambda`, `cloud_run`, `kubernetes`). This is what powers
+drift detection (the platform can flag when the running agent diverges from its
 declared manifest) and gives operators an inventory of what each agent is
 allowed to do.
 
 ```go
 err := guard.Connect(context.Background(), flyedge.ManifestInfo{
-    Framework:   "anthropic-sdk-go",
-    Tools:       []string{"get_weather", "search_web"},
-    Models:      []string{"claude-sonnet-4-5"},
-    Environment: "production",
+    Framework: "anthropic-sdk-go",
+    Tools:     []string{"get_weather", "search_web"},
+    Models:    []string{"claude-sonnet-4-5"},
 })
 ```
 
@@ -726,10 +726,9 @@ func run() error {
 
     // Register the agent's manifest (framework, tools, models).
     if err := guard.Connect(ctx, flyedge.ManifestInfo{
-        Framework:   "anthropic-sdk-go",
-        Tools:       []string{"get_weather"},
-        Models:      []string{"claude-sonnet-4-5"},
-        Environment: "production",
+        Framework: "anthropic-sdk-go",
+        Tools:     []string{"get_weather"},
+        Models:    []string{"claude-sonnet-4-5"},
     }); err != nil {
         return fmt.Errorf("connect: %w", err)
     }
@@ -872,10 +871,9 @@ type Config struct {
 }
 
 type ManifestInfo struct {
-    Framework   string
-    Tools       []string
-    Models      []string
-    Environment string
+    Framework string
+    Tools     []string
+    Models    []string
 }
 
 type Summary = telemetry.Summary

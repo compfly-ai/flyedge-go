@@ -56,10 +56,9 @@ func run() error {
 
 	// Register the agent's manifest (framework, tools, models).
 	if err := guard.Connect(ctx, flyedge.ManifestInfo{
-		Framework:   "anthropic-sdk-go",
-		Tools:       []string{"get_weather"},
-		Models:      []string{"claude-sonnet-4-5"},
-		Environment: "development",
+		Framework: "anthropic-sdk-go",
+		Tools:     []string{"get_weather"},
+		Models:    []string{"claude-sonnet-4-5"},
 	}); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}

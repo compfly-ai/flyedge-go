@@ -1,0 +1,16 @@
+[
+  {"name": "aws lambda", "env": {"AWS_LAMBDA_FUNCTION_NAME": "agent", "AWS_REGION": "us-east-1"}, "platform": "aws_lambda", "region": "us-east-1"},
+  {"name": "aws ecs", "env": {"ECS_CONTAINER_METADATA_URI_V4": "http://169.254.170.2/v4/x", "AWS_REGION": "eu-west-1"}, "platform": "aws_ecs", "region": "eu-west-1"},
+  {"name": "aws ecs with dockerenv", "env": {"ECS_CONTAINER_METADATA_URI": "http://169.254.170.2/v3/x"}, "dockerenv": true, "platform": "aws_ecs"},
+  {"name": "cloud run service", "env": {"K_SERVICE": "agent", "K_REVISION": "agent-001"}, "platform": "cloud_run"},
+  {"name": "cloud run functions", "env": {"K_SERVICE": "agent", "FUNCTION_TARGET": "handler"}, "platform": "cloud_run_functions"},
+  {"name": "cloud run job", "env": {"CLOUD_RUN_JOB": "agent-job"}, "platform": "cloud_run_job"},
+  {"name": "azure functions", "env": {"FUNCTIONS_WORKER_RUNTIME": "python", "WEBSITE_SITE_NAME": "agent", "REGION_NAME": "East US"}, "platform": "azure_functions", "region": "East US"},
+  {"name": "azure container apps", "env": {"CONTAINER_APP_NAME": "agent", "KUBERNETES_SERVICE_HOST": "10.0.0.1"}, "platform": "azure_container_apps"},
+  {"name": "azure app service", "env": {"WEBSITE_SITE_NAME": "agent", "REGION_NAME": "West Europe"}, "platform": "azure_app_service", "region": "West Europe"},
+  {"name": "vercel", "env": {"VERCEL": "1", "VERCEL_REGION": "iad1"}, "platform": "vercel", "region": "iad1"},
+  {"name": "kubernetes", "env": {"KUBERNETES_SERVICE_HOST": "10.0.0.1", "AWS_DEFAULT_REGION": "us-west-2"}, "dockerenv": true, "platform": "kubernetes", "region": "us-west-2"},
+  {"name": "docker", "env": {}, "dockerenv": true, "platform": "docker"},
+  {"name": "local shell with aws region", "env": {"AWS_DEFAULT_REGION": "us-east-1"}},
+  {"name": "unknown", "env": {}}
+]

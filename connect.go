@@ -45,11 +45,10 @@ type SkillInfo struct {
 // models/skills it uses. The platform uses this for presence + manifest-seeded behavioral
 // baselines.
 type ManifestInfo struct {
-	Framework   string      // e.g. "langchaingo", "anthropic-sdk-go"
-	Tools       []string    // tool names the agent can call
-	Models      []string    // model ids the agent uses
-	Skills      []SkillInfo // Anthropic Agent Skills available to the agent (frontmatter only)
-	Environment string      // dev|staging|prod
+	Framework string      // e.g. "langchaingo", "anthropic-sdk-go"
+	Tools     []string    // tool names the agent can call
+	Models    []string    // model ids the agent uses
+	Skills    []SkillInfo // Anthropic Agent Skills available to the agent (frontmatter only)
 
 	// Enterprise is an optional enterprise-identity block (provider, tenantId, roles, groups,
 	// scopes, issuer, …). prism stores it on the agent (pass-through) for enterprise governance.
@@ -142,7 +141,7 @@ type agentManifest struct {
 	ManifestHash    string            `json:"manifest_hash"`
 	Framework       frameworkInfo     `json:"framework"`
 	Capabilities    agentCapabilities `json:"capabilities"`
-	Environment     *environmentInfo  `json:"environment,omitempty"`
+	Deployment      *deploymentInfo   `json:"deployment,omitempty"`
 	Enterprise      map[string]any    `json:"enterprise,omitempty"`
 	EnterpriseToken string            `json:"enterprise_token,omitempty"`
 }
@@ -180,10 +179,6 @@ type modelCapability struct {
 	ModelID  string `json:"model_id"`
 }
 
-type environmentInfo struct {
-	Name string `json:"name"`
-}
-
 func buildManifest(info ManifestInfo) agentManifest {
 	fw := info.Framework
 	if fw == "" {
@@ -210,9 +205,7 @@ func buildManifest(info ManifestInfo) agentManifest {
 		SDKVersion:   sdkVersion,
 		Framework:    frameworkInfo{Name: fw, Version: sdkVersion},
 		Capabilities: caps,
-	}
-	if info.Environment != "" {
-		m.Environment = &environmentInfo{Name: info.Environment}
+		Deployment:   processDeployment(),
 	}
 	// Enterprise identity is pass-through metadata; it is deliberately excluded from manifestHash
 	// (below) so rotating an enterprise token does not trigger a manifest-drift refresh.

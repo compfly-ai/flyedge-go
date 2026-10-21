@@ -177,10 +177,9 @@ func run() error {
 	//    presence/config polling. Best-effort — a local run without a reachable gateway still works
 	//    as an ungoverned/observe agent.
 	if err := guard.Connect(ctx, flyedge.ManifestInfo{
-		Framework:   "reference-agent",
-		Environment: envOr("COMPFLY_ENVIRONMENT", "prod"),
-		Models:      []string{a.provider.Model()},
-		Tools:       toolNames(),
+		Framework: "reference-agent",
+		Models:    []string{a.provider.Model()},
+		Tools:     toolNames(),
 	}); err != nil {
 		gov(yellow, "⚙  Connect failed (%v) — running with fail-open checks", err)
 	}

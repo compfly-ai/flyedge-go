@@ -66,10 +66,9 @@ func run() error {
 
 	ctx := context.Background()
 	if err := g.Connect(ctx, flyedge.ManifestInfo{
-		Framework:   "flyedge-go/sim-target",
-		Models:      []string{model},
-		Tools:       []string{"get_weather", "lookup_order"},
-		Environment: "development",
+		Framework: "flyedge-go/sim-target",
+		Models:    []string{model},
+		Tools:     []string{"get_weather", "lookup_order"},
 	}); err != nil {
 		return err
 	}
