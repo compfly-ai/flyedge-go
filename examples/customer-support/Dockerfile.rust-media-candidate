@@ -1,0 +1,23 @@
+FROM rust:1.94-bookworm AS rust-build
+WORKDIR /sdk
+COPY --from=sdk_context . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --locked --release -p flyedge-go-ffi
+
+FROM golang:1.25-bookworm AS go-build
+WORKDIR /src
+COPY . .
+COPY --from=rust-build /sdk/bindings/go /sdk/bindings/go
+COPY --from=rust-build /sdk/target/release/libflyedge_go_ffi.so /sdk/target/release/libflyedge_go_ffi.so
+WORKDIR /src/examples/customer-support
+RUN go mod edit -replace=github.com/compfly-ai/flyedge/bindings/go=/sdk/bindings/go && \
+    CGO_ENABLED=1 go build -p 2 -o /customer-support-go .
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --from=go-build /customer-support-go /customer-support-go
+COPY --from=rust-build /sdk/target/release/libflyedge_go_ffi.so /usr/lib/libflyedge_go_ffi.so
+ENV LD_LIBRARY_PATH=/usr/lib
+ENV AGENT_ADDR=:8096
+EXPOSE 8096
+ENTRYPOINT ["/customer-support-go"]
