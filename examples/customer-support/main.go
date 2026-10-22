@@ -221,7 +221,7 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	c.touched = time.Now()
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "support_session", Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 1800})
+	http.SetCookie(w, &http.Cookie{Name: "support_session", Value: id, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: 1800})
 	if !c.mu.TryLock() {
 		writeJSON(w, 409, map[string]string{"error": "Please wait for the current reply."})
 		return
