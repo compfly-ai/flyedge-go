@@ -42,6 +42,9 @@ type SimulationConfig struct {
 // flyedgeConfigResponse is the GET /v1/flyedge/config body. All fields are optional (prism omits
 // them when null).
 type flyedgeConfigResponse struct {
+	AgentSettings            map[string]any    `json:"agent_settings,omitempty"`
+	AgentSlug                string            `json:"agent_slug,omitempty"`
+	NamespaceID              string            `json:"namespace_id,omitempty"`
 	Simulation               *SimulationConfig `json:"simulation,omitempty"`
 	ManifestRefreshRequired  *bool             `json:"manifest_refresh_required,omitempty"`
 	HeartbeatIntervalSeconds *uint32           `json:"heartbeat_interval_seconds,omitempty"`
@@ -147,6 +150,18 @@ func (g *Guard) pollOnce(getter signedGetter) {
 // handler), tracks the simulation block (firing the internal sim hook on change), and honors a
 // manifest-refresh request (default: re-Connect).
 func (g *Guard) applyConfig(cr flyedgeConfigResponse) {
+	g.pollMu.Lock()
+	ttl := 3 * g.pollInterval
+	if ttl < 15*time.Second {
+		ttl = 15 * time.Second
+	}
+	if ttl > 900*time.Second {
+		ttl = 900 * time.Second
+	}
+	g.nontextAllowed = g.DID() != "" && cr.AgentSlug != "" && cr.NamespaceID != "" && cr.AgentSettings["nontext_payload"] == "allowed"
+	g.nontextDID = g.DID()
+	g.nontextExpires = time.Now().Add(ttl)
+	g.pollMu.Unlock()
 	if cr.ModelMode != nil {
 		nm := ModelMode(*cr.ModelMode)
 		g.pollMu.Lock()
@@ -180,6 +195,14 @@ func (g *Guard) applyConfig(cr flyedgeConfigResponse) {
 			_ = g.reconnect(context.Background())
 		}
 	}
+}
+
+// NontextPayloadAllowed reads the existing heartbeat's expiring, per-agent permission.
+// Missing/invalid settings and stale permission never enable attachment inspection.
+func (g *Guard) NontextPayloadAllowed() bool {
+	g.pollMu.RLock()
+	defer g.pollMu.RUnlock()
+	return g.nontextAlways || g.nontextAllowed && g.nontextDID == g.DID() && time.Now().Before(g.nontextExpires)
 }
 
 // heartbeatHeaders builds the X-Agent-* headers prism reads on the config GET: the heartbeat marker

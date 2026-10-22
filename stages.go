@@ -21,8 +21,8 @@ func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, arg
 		ComponentType: "TOOL",
 		ComponentName: toolName,
 		MethodName:    "call",
-		Content:       Content{Full: jsonString(args)},
-		Operation:     Operation{Type: "tool.call", ToolName: toolName, ToolArgsJSON: jsonString(args)},
+		Content:       g.mediaContent(args),
+		Operation:     Operation{Type: "tool.call", ToolName: toolName, ToolArgsJSON: jsonString(policyValue(args, 0))},
 	})
 }
 
@@ -35,7 +35,7 @@ func (g *Guard) CheckToolResponse(ctx context.Context, session, toolName string,
 		ComponentType: "TOOL",
 		ComponentName: toolName,
 		MethodName:    "response",
-		Content:       Content{Full: jsonString(result)},
+		Content:       g.mediaContent(result),
 		Operation:     Operation{Type: "tool.response", ToolName: toolName},
 	})
 }
