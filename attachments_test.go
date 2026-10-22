@@ -57,7 +57,7 @@ func TestMediaPermissionDefaultsRevocationAndExpiry(t *testing.T) {
 	if g.NontextPayloadAllowed() {
 		t.Fatal("unset permission allowed")
 	}
-	for _, v := range []any{nil, "", "denied", true, "ALLOWED", map[string]any{}} {
+	for _, v := range []any{nil, "", "skipped", "denied", true, "ALLOWED", map[string]any{}} {
 		allowMedia(g)
 		g.applyConfig(flyedgeConfigResponse{AgentSlug: "support", NamespaceID: "ns", AgentSettings: map[string]any{"nontext_payload": v}})
 		if g.NontextPayloadAllowed() {

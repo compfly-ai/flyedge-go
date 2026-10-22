@@ -6,7 +6,7 @@ not require another decoding route for this sender.
 
 The existing config heartbeat carries `agent_settings.nontext_payload` for the
 authenticated agent. Only exact `allowed`, a resolved agent/namespace and a
-signing identity enable inspection. Missing, null, invalid and denied settings
+signing identity enable inspection. Missing, null, skipped and invalid settings
 disable it. The in-memory snapshot expires after three heartbeat intervals,
 bounded to 15–900 seconds. There is no extra polling or org-level fallback.
 
