@@ -213,7 +213,6 @@ func TestResponsesUnsupportedModesAndProviderErrors(t *testing.T) {
 		status            int
 		pre               bool
 	}{
-		{name: "proxy", body: responsesRequest, proxy: true}, {name: "remote gateway", body: responsesRequest, mode: ModelModeGateway},
 		{name: "background", body: `{"background":true}`}, {name: "malformed request", body: `[]`},
 		{name: "failed", body: responsesRequest, reply: `{"status":"failed","error":{},"output":[]}`, pre: true},
 		{name: "queued", body: responsesRequest, reply: `{"status":"queued","output":[]}`, pre: true},
@@ -336,3 +335,35 @@ func TestResponsesCompatibleRoutesAndNonGenerationPassthrough(t *testing.T) {
 		_ = resp.Body.Close()
 	}
 }
+
+func TestResponsesProxyRoutesWithoutDuplicateChecks(t *testing.T) {
+	for _, mode := range []ModelMode{ModelModeCheck, ModelModePassthrough, ModelModeGateway} {
+		t.Run(string(mode), func(t *testing.T) {
+			e := &responsesEnforcer{}
+			g := responsesGuard(t, Config{APIURL: "https://prism.example", ProxyMode: mode == ModelModeCheck}, e)
+			g.modelMode = mode
+			base := responsesRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.String() != "https://prism.example/v1/proxy" || req.Header.Get("X-Destination") != "https://api.openai.com/v1/responses" {
+					t.Fatalf("wrong proxy route: %s %v", req.URL, req.Header)
+				}
+				if req.Header.Get(enforce.HeaderOBOPrincipal) == "" || req.Header.Get(enforce.HeaderDelegationToken) != "test-delegation" {
+					t.Fatal("missing proxy identity")
+				}
+				raw, _ := io.ReadAll(req.Body)
+				if string(raw) != responsesRequest {
+					t.Fatalf("changed request: %s", raw)
+				}
+				return &http.Response{StatusCode: 451, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"blocked"}`))}, nil
+			})
+			resp, err := g.WrapRoundTripper(base).RoundTrip(responseReq(t, responsesRequest))
+			if err != nil || resp.StatusCode != 451 || len(e.requests) != 0 {
+				t.Fatalf("response=%v err=%v checks=%d", resp, err, len(e.requests))
+			}
+			resp.Body.Close()
+		})
+	}
+}
+
+type responsesRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f responsesRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

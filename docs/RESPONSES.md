@@ -28,11 +28,18 @@ it does not reconstruct provider-held context. Replay conversation items inline
 when local inspection of prior content is required. This flag does not make opaque
 reasoning or multimodal content readable.
 
-Responses proxy mode rejects before provider I/O until Prism supports the protocol.
-This applies to `Config.ProxyMode` and non-check modes received through config
-polling. Background creation rejects because retrieval/polling is not governed.
-WebSockets, retrieval and `/responses/compact` are outside this generation contract;
-other routes keep their existing pass-through behavior.
+Responses proxy/gateway mode forwards through Prism without duplicate SDK model
+checks. This requires [Prism PR #316](https://github.com/compfly-ai/platform/pull/316)
+to be deployed **before** upgrading proxy-mode clients: older Prism can forward
+Responses without inspecting its content. Prism supports synchronous requests with
+explicit input history; it rejects streaming, background generation and server-held
+history references. SDK check mode retains stream auditing and partial-context support.
+
+Coordinated SDK changes: [Go #31](https://github.com/compfly-ai/flyedge-go/pull/31)
+and [Rust/Python/TypeScript #154](https://github.com/compfly-ai/flyedge/pull/154).
+Background creation remains rejected by the SDK because retrieval is not governed.
+WebSockets, retrieval and `/responses/compact` remain outside the supported generation
+contract; other HTTP routes keep their existing pass-through behavior.
 
 HTTP provider errors pass back without a successful post-model check. A 2xx failure,
 queued/in-progress result, malformed JSON or missing output array returns an error.
@@ -40,7 +47,7 @@ Incomplete output is checked and marked `capture_incomplete`. Empty output still
 records a post-model check. Simulation config injection prepends to `instructions`,
 retaining existing guidance and input.
 
-## Streaming
+## Streaming (SDK check mode)
 
 SSE bytes pass through unchanged. The SDK audits a bounded 1 MiB capture exactly
 once at EOF/read failure or Close. `verdict_relay=stream_delivered` makes this an

@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/compfly-ai/flyedge-go/enforce"
 )
 
 // Responses has its own protocol: typed input/output items and named SSE events.
@@ -32,9 +34,6 @@ func (t *guardRoundTripper) roundTripResponses(req *http.Request) (*http.Respons
 	}
 	if body["background"] == true {
 		return nil, fmt.Errorf("Responses background mode is unsupported: output retrieval is not governed")
-	}
-	if t.guard.cfg.ProxyMode || t.guard.ModelMode() != ModelModeCheck {
-		return nil, fmt.Errorf("Responses proxy mode is unsupported until the gateway implements Responses governance")
 	}
 	partial := body["previous_response_id"] != nil || body["conversation"] != nil
 	if items, ok := body["input"].([]any); ok {
@@ -57,6 +56,14 @@ func (t *guardRoundTripper) roundTripResponses(req *http.Request) (*http.Respons
 	req.ContentLength = int64(len(raw))
 	requestBody := raw
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(requestBody)), nil }
+	// Prism owns the model gates in proxy/gateway mode. Requires the paired
+	// Responses-capable Prism deployment; no duplicate out-of-band checks.
+	if t.guard.cfg.ProxyMode || t.guard.ModelMode() != ModelModeCheck {
+		for key, value := range enforce.IdentityHeaders(req.Context()) {
+			req.Header.Set(key, value)
+		}
+		return t.proxyForward(req, raw)
+	}
 	model, _ := body["model"].(string)
 	session := t.resolveSession(req)
 	check := func(ctx context.Context, stage Stage, text string, metadata map[string]any) error {
