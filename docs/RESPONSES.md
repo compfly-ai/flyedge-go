@@ -66,3 +66,11 @@ This change does not publish a release, update an agent SDK pin, remove its expl
 Responses workaround, or validate live OpenAI/Prism traffic. After pinning a released
 fix and verifying native coverage, remove duplicate explicit model checks while
 retaining the application's Responses loop and tool gates.
+
+## Official OpenAI documentation
+
+- [Responses API migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses): endpoint, request/output shapes and differences from Chat Completions.
+- [Function calling](https://developers.openai.com/api/docs/guides/function-calling): function-call items, arguments, results and `call_id` correlation.
+- [Streaming API responses](https://developers.openai.com/api/docs/guides/streaming-responses): typed server-sent events and stream handling.
+- [Conversation state](https://developers.openai.com/api/docs/guides/conversation-state): manual history, `previous_response_id` and persistent conversations.
+- [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol): model-specific requirement to use Responses for tool calling.
