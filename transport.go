@@ -98,6 +98,12 @@ func (t *guardRoundTripper) resolveSession(req *http.Request) string {
 }
 
 func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(req.URL.Path, "/responses") {
+		if req.Method != http.MethodPost {
+			return t.base.RoundTrip(req)
+		}
+		return t.roundTripResponses(req)
+	}
 	ex := extractorFor(req.URL.Host, req.URL.Path)
 	if ex == nil || req.Body == nil {
 		return t.base.RoundTrip(req) // not a known LLM call — pass through
