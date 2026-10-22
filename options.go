@@ -58,6 +58,13 @@ func WithMode(m Mode) Option {
 	return func(g *Guard) error { g.cfg.Mode = m; return nil }
 }
 
+// WithAttachments sends inline images and PDFs with every check, independent of the per-agent
+// nontext_payload setting. For a caller that decides media capture itself, such as flyedged,
+// whose Claude Code plugin is the opt-in.
+func WithAttachments() Option {
+	return func(g *Guard) error { g.nontextAlways = true; return nil }
+}
+
 // WithFailMode overrides Config.FailMode.
 func WithFailMode(f FailMode) Option {
 	return func(g *Guard) error { g.cfg.FailMode = f; return nil }

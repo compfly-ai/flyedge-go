@@ -81,6 +81,20 @@ func TestMediaPermissionDefaultsRevocationAndExpiry(t *testing.T) {
 	}
 }
 
+func TestWithAttachmentsSendsWithoutAgentSetting(t *testing.T) {
+	rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
+	g, err := New(Config{}, WithSigner(mediaSigner{}), WithEnforcer(rec), WithAttachments())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { g.Close() })
+	g.applyConfig(flyedgeConfigResponse{AgentSlug: "support", NamespaceID: "ns", AgentSettings: map[string]any{"nontext_payload": "skipped"}})
+	dec, err := g.Check(context.Background(), CheckRequest{Content: Content{Full: "caption", Attachments: []Attachment{{ID: "a", MediaType: "image/png", DataBase64: "c3ludGhldGlj"}}}})
+	if err != nil || len(rec.requests) != 1 || len(rec.requests[0].Content.Attachments) != 1 || dec.NontextStatus != "decoded" {
+		t.Fatalf("WithAttachments must send attachments without the agent setting: checks=%d dec=%+v err=%v", len(rec.requests), dec, err)
+	}
+}
+
 const mediaBody = `{"model":"gpt-4o-mini","messages":[{"role":"user","content":[{"type":"text","text":"Read this"},{"type":"image_url","image_url":{"url":"data:image/png;base64,c3ludGhldGlj"}}]}]}`
 
 func TestMediaTransportGatedAndProviderInputPreserved(t *testing.T) {

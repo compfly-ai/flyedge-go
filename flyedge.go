@@ -114,6 +114,7 @@ type Guard struct {
 	manifestHash   string
 	modelMode      ModelMode
 	nontextAllowed bool
+	nontextAlways  bool // WithAttachments: set once at construction
 	nontextDID     string
 	nontextExpires time.Time
 	sim            *SimulationConfig

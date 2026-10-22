@@ -202,7 +202,7 @@ func (g *Guard) applyConfig(cr flyedgeConfigResponse) {
 func (g *Guard) NontextPayloadAllowed() bool {
 	g.pollMu.RLock()
 	defer g.pollMu.RUnlock()
-	return g.nontextAllowed && g.nontextDID == g.DID() && time.Now().Before(g.nontextExpires)
+	return g.nontextAlways || g.nontextAllowed && g.nontextDID == g.DID() && time.Now().Before(g.nontextExpires)
 }
 
 // heartbeatHeaders builds the X-Agent-* headers prism reads on the config GET: the heartbeat marker
