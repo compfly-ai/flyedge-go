@@ -71,6 +71,11 @@ merely observing it.
 See the [complete developer guide](docs/DEVELOPER_GUIDE_GO.md) for Anthropic, OpenAI,
 Gemini, langchaingo, tool-use loops, identity, telemetry, and production configuration.
 
+OpenAI Responses (`client.Responses.New`) is covered by the same wrapped HTTP
+transport, including function-call output and streaming audits. See
+[Responses coverage and limits](docs/RESPONSES.md), including partial conversation
+context and coordinated Prism proxy rollout and background-mode limits.
+
 ## Governance points
 
 Wire in only the boundaries you need:
