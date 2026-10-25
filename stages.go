@@ -22,7 +22,7 @@ func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, arg
 		ComponentName: toolName,
 		MethodName:    "call",
 		Content:       g.mediaContent(args),
-		Operation:     Operation{Type: "tool.call", ToolName: toolName, ToolArgsJSON: jsonString(policyValue(args, 0))},
+		Operation:     Operation{Type: "tool.call", ToolName: toolName, ToolArgsJSON: jsonString(policyValue(jsonValue(args), 0))},
 	})
 }
 

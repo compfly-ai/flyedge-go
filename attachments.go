@@ -1,6 +1,7 @@
 package flyedge
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -14,6 +15,20 @@ var mediaMIMEPattern = regexp.MustCompile(`(?i)["'](?:media_type|mime_type|mimeT
 var mediaFieldPattern = regexp.MustCompile(`(["'](?:data|base64|file_data)["']\s*:\s*)["'][A-Za-z0-9+/=\r\n\t ]+["']`)
 
 func mediaAuditText(text string) string {
+	// JSON is scrubbed by structure, so only image and PDF bytes go; other fields named data stay.
+	if t := strings.TrimSpace(text); strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") {
+		dec := json.NewDecoder(strings.NewReader(t))
+		dec.UseNumber()
+		var v any
+		if dec.Decode(&v) == nil && !dec.More() {
+			var out bytes.Buffer
+			enc := json.NewEncoder(&out)
+			enc.SetEscapeHTML(false)
+			if enc.Encode(policyValue(v, 0)) == nil {
+				return strings.TrimSuffix(out.String(), "\n")
+			}
+		}
+	}
 	text = mediaURLPattern.ReplaceAllString(text, "[inline media omitted]")
 	if mediaMIMEPattern.MatchString(text) {
 		text = mediaFieldPattern.ReplaceAllString(text, `${1}"[inline media omitted]"`)
@@ -82,10 +97,13 @@ func ExtractAttachments(value any) []Attachment {
 				return
 			case "image", "document":
 				if src, ok := x["source"].(map[string]any); ok {
+					if src["type"] != "base64" && !isMediaMIME(src["media_type"]) {
+						return // a text document is policy text, not an attachment
+					}
 					mime, _ := src["media_type"].(string)
 					data, _ := src["data"].(string)
 					add(mime, data)
-				} else {
+				} else if x["type"] == "image" {
 					add("unresolved", "")
 				}
 				return
@@ -123,18 +141,11 @@ func policyValue(v any, depth int) any {
 	}
 	switch x := v.(type) {
 	case map[string]any:
-		typ, _ := x["type"].(string)
-		switch typ {
-		case "image_url", "input_image", "input_file", "file", "image", "document":
-			return "[inline media omitted]"
-		}
-		if x["inlineData"] != nil || x["inline_data"] != nil {
-			return "[inline media omitted]"
-		}
 		out := make(map[string]any, len(x))
 		for k, child := range x {
 			out[k] = policyValue(child, depth+1)
 		}
+		omitMediaBytes(x, out)
 		return out
 	case []any:
 		out := make([]any, len(x))
@@ -149,7 +160,63 @@ func policyValue(v any, depth int) any {
 	}
 }
 
+// omitMediaBytes replaces only the bytes of a recognized image or PDF block in out, the policy copy of
+// in. Its text, references and sibling fields stay visible to policy; a text document is left whole.
+// Data URIs in strings are already removed by mediaAuditText.
+func omitMediaBytes(in, out map[string]any) {
+	const omitted = "[inline media omitted]"
+	omit := func(parent any, key string) {
+		if m, ok := parent.(map[string]any); ok {
+			if _, isString := m[key].(string); isString {
+				m[key] = omitted
+			}
+		}
+	}
+	switch in["type"] {
+	case "image", "document":
+		if src, ok := in["source"].(map[string]any); ok && (src["type"] == "base64" || isMediaMIME(src["media_type"])) {
+			omit(out["source"], "data")
+		}
+	case "input_file":
+		omit(out, "file_data")
+	case "file":
+		omit(out["file"], "file_data")
+	}
+	for _, key := range []string{"inlineData", "inline_data"} {
+		if src, ok := in[key].(map[string]any); ok && (isMediaMIME(src["mimeType"]) || isMediaMIME(src["mime_type"])) {
+			omit(out[key], "data")
+		}
+	}
+}
+
+func isMediaMIME(v any) bool {
+	s, _ := v.(string)
+	s = strings.ToLower(s)
+	return strings.HasPrefix(s, "image/") || s == "application/pdf"
+}
+
+// jsonValue gives a typed Go value (a struct, typed map or slice) the decoded-JSON shape the media
+// walkers read, so its images and PDFs are found and kept out of policy text like any other input.
+func jsonValue(v any) any {
+	switch v.(type) {
+	case nil, string, bool, float64, json.Number, map[string]any, []any:
+		return v
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var out any
+	if dec.Decode(&out) != nil {
+		return v
+	}
+	return out
+}
+
 func (g *Guard) mediaContent(value any) Content {
+	value = jsonValue(value)
 	// Permission precedes normalization, hashing and attachment forwarding.
 	var attachments []Attachment
 	if g.NontextPayloadAllowed() {

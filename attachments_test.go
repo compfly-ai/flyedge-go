@@ -220,3 +220,73 @@ func TestPlainTextEncodedInputKeepsExistingRoute(t *testing.T) {
 		t.Fatal("ordinary text route changed")
 	}
 }
+
+func TestToolDocumentTextStaysVisibleToPolicy(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
+		g := mediaGuard(t, rec, FailOpen)
+		if allowed {
+			allowMedia(g)
+		}
+		input := map[string]any{
+			"plain":  map[string]any{"type": "document", "text": "sensitive content"},
+			"source": map[string]any{"type": "document", "source": map[string]any{"type": "text", "media_type": "text/plain", "data": "quarterly figures"}},
+			"image":  map[string]any{"type": "image", "caption": "scanned form", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "c3ludGhldGlj"}},
+		}
+		if _, err := g.CheckToolCall(context.Background(), "s", "files", input); err != nil {
+			t.Fatal(err)
+		}
+		r := rec.requests[0]
+		for _, s := range []string{r.Content.Full, r.Operation.ToolArgsJSON} {
+			for _, want := range []string{"sensitive content", "quarterly figures", "scanned form"} {
+				if !strings.Contains(s, want) {
+					t.Fatalf("allowed=%v: text %q hidden from policy: %s", allowed, want, s)
+				}
+			}
+			if strings.Contains(s, "c3ludGhldGlj") {
+				t.Fatalf("allowed=%v: image bytes entered policy text", allowed)
+			}
+		}
+		if len(r.Content.Attachments) != map[bool]int{false: 0, true: 1}[allowed] {
+			t.Fatalf("allowed=%v: attachments=%d", allowed, len(r.Content.Attachments))
+		}
+	}
+}
+
+func TestTypedToolInputMediaInspected(t *testing.T) {
+	type source struct {
+		Type      string `json:"type"`
+		MediaType string `json:"media_type"`
+		Data      string `json:"data"`
+	}
+	type block struct {
+		Type   string `json:"type"`
+		Source source `json:"source"`
+	}
+	type args struct {
+		Query  string  `json:"query"`
+		Blocks []block `json:"blocks"`
+		Count  int64   `json:"count"`
+	}
+	in := args{Query: "summarize", Blocks: []block{{Type: "image", Source: source{"base64", "image/png", "c3ludGhldGlj"}}}, Count: 9007199254740993}
+	for _, allowed := range []bool{false, true} {
+		rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
+		g := mediaGuard(t, rec, FailOpen)
+		if allowed {
+			allowMedia(g)
+		}
+		if _, err := g.CheckToolCall(context.Background(), "s", "files", in); err != nil {
+			t.Fatal(err)
+		}
+		r := rec.requests[0]
+		if strings.Contains(r.Content.Full, "c3ludGhldGlj") || strings.Contains(r.Operation.ToolArgsJSON, "c3ludGhldGlj") {
+			t.Fatalf("allowed=%v: typed input bytes entered policy text", allowed)
+		}
+		if !strings.Contains(r.Content.Full, "summarize") || !strings.Contains(r.Content.Full, "9007199254740993") {
+			t.Fatalf("allowed=%v: typed input text changed: %s", allowed, r.Content.Full)
+		}
+		if len(r.Content.Attachments) != map[bool]int{false: 0, true: 1}[allowed] {
+			t.Fatalf("allowed=%v: attachments=%d", allowed, len(r.Content.Attachments))
+		}
+	}
+}
