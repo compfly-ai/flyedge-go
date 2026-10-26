@@ -167,3 +167,90 @@ telemetry carries it in the reserved `data.error` key. These failures do not
 count as policy checks. Metadata is retained by ingestion, but dedicated UI
 columns require consumer support. Callers choose which content to capture and
 must populate these optional fields; the SDK does not collect it automatically.
+
+## Explicit platform invocations
+
+`Guard.ServeInvocations` lets Playground, simulations, and evaluations invoke an
+application handler over an outbound WebSocket. Calling `New` or `Connect` does
+not enable it: your application must explicitly register a handler and authorize
+its purposes. The handler runs with your application's credentials, so wire policy
+checks into its model and tool boundaries as you would for a normal invocation.
+
+```go
+connection, err := guard.ServeInvocations(ctx, flyedge.InvocationOptions{
+    Name:        "Support agent",
+    Environment: "staging",
+    Purposes: []flyedge.InvocationPurpose{
+        flyedge.PurposePlayground,
+        flyedge.PurposeSimulation,
+        flyedge.PurposeEval,
+    },
+    Contract: &flyedge.InvocationContract{
+        State: flyedge.StateContract{
+            Fields: map[string]flyedge.StateField{
+                "selected_order_id": {Type: flyedge.StateString},
+                "form":              {Type: flyedge.StateJSON},
+            },
+        },
+    },
+}, func(ctx context.Context, request flyedge.InvocationRequest, out flyedge.InvocationWriter) error {
+    // Optional state is application input. Convert it into your own domain or
+    // protobuf types, initialize test context, and run your application logic.
+    var selectedOrder string
+    if raw, supplied := request.State["selected_order_id"]; supplied {
+        if err := json.Unmarshal(raw, &selectedOrder); err != nil {
+            return err
+        }
+    }
+    // Invoke your governed application here. TextDelta may be called repeatedly
+    // as your model produces text. Returning nil completes this invocation.
+    return out.TextDelta(ctx, "Selected order: " + selectedOrder)
+})
+if err != nil {
+    return err
+}
+defer connection.Close()
+return connection.Wait()
+```
+
+This snippet uses `encoding/json`. Configure the Guard with its DID and Ed25519
+private key as in Quick start. Registration is signed, requires an existing
+platform agent, and publishes the state contract before accepting invocations.
+HTTPS is required; `AllowInsecureLoopback: true` permits only literal loopback HTTP
+for local development. `Environment` selects an agent environment; `APIURL`
+selects the local or hosted deployment.
+
+| API | Behavior |
+| --- | --- |
+| `InvocationOptions.Purposes` | Explicitly permits `PurposePlayground`, `PurposeSimulation`, and/or `PurposeEval`. |
+| `LeaseDuration` | Renewable authorization window, default one hour; accepted range 1 second–24 hours. |
+| `AutoRenew` | `*bool`, default true when nil. A pointer to false creates a finite lease. Renewal keeps the same connection alive until stopped or revoked. |
+| `AllowClientState` | `*bool`, default true when nil. A pointer to false rejects state. A declared state contract requires it to be enabled. |
+| `Contract.State` | Declares `Fields` and optional `Required` names. Types: `StateString`, `StateNumber`, `StateBoolean`, `StateJSON`. No state defaults are injected. |
+| `AllowSimulationInjection` | Default false. Explicitly allows simulation mutation hooks; unprotected baseline execution is not supported. |
+| `RequestTimeout` | Invocation timeout, default two minutes; accepted range 1 second–10 minutes. |
+| `InvocationRequest` | Contains `ID`, `Purpose`, `Messages`, `SessionID`, `RunID`, `Deadline`, optional `State`, and `ContractVersion`. |
+| `InvocationWriter.TextDelta` | Sends a text chunk immediately over the reverse WebSocket. The current platform broker collects chunks before returning the full response to Playground. |
+| `InvocationConnection` | Exposes the lease `ID`, pinned `ContractVersion`, `ExpiresAt()`, `Close()`, and blocking `Wait()`. |
+
+`State` is `map[string]json.RawMessage`: nil means no state was supplied; a non-nil
+empty map means explicit empty state. A dataset scenario supplies its own literal
+`state` object, and Playground supplies values entered in the state editor. The
+platform validates supplied values against the declared contract. Optional typed
+fields should be omitted rather than set to null; required fields are checked
+when state is supplied. State is not an authenticated identity or authorization
+grant. Your application explicitly decides how to consume it before the agentic
+layer runs. New evaluations do not select run-wide state profiles or substitute
+tokens inside state.
+
+The handler context is canceled on timeout, shutdown, or revocation. Returning an
+error fails that invocation. `Wait()` reports `ErrConnectionRevoked`,
+`ErrConnectionExpired`, or `ErrInvocationOutcomeUnknown` when appropriate. Lost
+connections do not automatically reconnect or replay in-flight work. Platform
+revocation is terminal; renewing the lease cannot undo it. Cancellation is
+cooperative and cannot reverse completed side effects. Each connection serves one
+active invocation at a time, with a maximum aggregate text output of 1 MiB.
+
+See [the runnable support agent](examples/remote-agent/README.md) and
+[its scenario-owned state dataset](examples/remote-agent/datasets/client-state.json)
+for an example with tool calls, policy checks, colored logs, and simulation telemetry.

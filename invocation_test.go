@@ -48,9 +48,9 @@ func invocationFixture(t *testing.T, peer func(context.Context, *websocket.Conn)
 	return invocationLeaseFixture(t, time.Minute, nil, peer)
 }
 func invocationLeaseFixture(t *testing.T, duration time.Duration, autoRenew *bool, peer func(context.Context, *websocket.Conn)) (*Guard, *InvocationConnection) {
-	return invocationStateFixture(t, duration, autoRenew, false, peer)
+	return invocationStateFixture(t, duration, autoRenew, nil, peer)
 }
-func invocationStateFixture(t *testing.T, duration time.Duration, autoRenew *bool, allowState bool, peer func(context.Context, *websocket.Conn)) (*Guard, *InvocationConnection) {
+func invocationStateFixture(t *testing.T, duration time.Duration, autoRenew *bool, allowState *bool, peer func(context.Context, *websocket.Conn)) (*Guard, *InvocationConnection) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
@@ -59,6 +59,16 @@ func invocationStateFixture(t *testing.T, duration time.Duration, autoRenew *boo
 	key := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
+			var registration struct {
+				AllowClientState *bool `json:"allow_client_state"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&registration); err != nil {
+				t.Error(err)
+			}
+			wantState := allowState == nil || *allowState
+			if registration.AllowClientState == nil || *registration.AllowClientState != wantState {
+				t.Errorf("registration client state = %v, want %v", registration.AllowClientState, wantState)
+			}
 			if r.Header.Get("X-CompFly-Signature") == "" {
 				t.Error("missing DID signature")
 			}
@@ -240,9 +250,10 @@ func TestInvocationFiniteLeaseAndMissingAcknowledgementExpire(t *testing.T) {
 	}
 }
 
-func TestClientStateRequiresOptInAndPreservesTypes(t *testing.T) {
-	for _, allow := range []bool{false, true} {
-		t.Run(fmt.Sprint(allow), func(t *testing.T) {
+func TestClientStateDefaultsEnabledAndPreservesTypes(t *testing.T) {
+	disabled, enabled := false, true
+	for name, allow := range map[string]*bool{"default": nil, "disabled": &disabled, "enabled": &enabled} {
+		t.Run(name, func(t *testing.T) {
 			_, c := invocationStateFixture(t, time.Minute, nil, allow, func(ctx context.Context, ws *websocket.Conn) {
 				for i, state := range []string{`{}`, `{"form":{"enabled":false,"count":2,"selected":null}}`} {
 					request := map[string]any{"id": fmt.Sprint(i), "purpose": "playground", "session_id": "session", "messages": []InvocationMessage{{Role: "user", Content: "hello"}}, "deadline": time.Now().Add(time.Minute), "state": json.RawMessage(state)}
@@ -255,7 +266,7 @@ func TestClientStateRequiresOptInAndPreservesTypes(t *testing.T) {
 						t.Error(err)
 						return
 					}
-					if !allow {
+					if allow != nil && !*allow {
 						if f.Type != "failed" || f.Error != "client state not authorized" {
 							t.Errorf("unexpected rejection: %+v", f)
 						}

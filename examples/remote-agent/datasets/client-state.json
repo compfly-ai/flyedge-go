@@ -1,0 +1,71 @@
+{
+  "evalType": "general",
+  "defaults": {
+    "assertionMode": "exact",
+    "label": "positive",
+    "split": "train",
+    "categoryKey": "client-state"
+  },
+  "items": [
+    {
+      "prompt": "What is the status of the selected order?",
+      "state": {
+        "current_page": "order-details",
+        "selected_order_id": "DEMO-43",
+        "form": {}
+      },
+      "expectedResponse": "Order DEMO-43 is processing. Tool evidence: {\"order_id\":\"DEMO-43\",\"status\":\"processing\"}",
+      "assertionMode": "exact",
+      "components": [
+        {
+          "anchorKey": "tool:lookup_order"
+        }
+      ],
+      "expected": {
+        "checks": [
+          {
+            "id": "required-tool-called",
+            "kind": "deterministic",
+            "assert": "tool_called",
+            "tool": "lookup_order"
+          }
+        ],
+        "checkPolicy": {
+          "minimumScore": 1,
+          "gating": true
+        }
+      }
+    },
+    {
+      "prompt": "Check the order entered in this form.",
+      "state": {
+        "current_page": "order-search",
+        "form": {
+          "order_id": "DEMO-42",
+          "include_tracking": false
+        }
+      },
+      "expectedResponse": "Order DEMO-42 is shipped. Tool evidence: {\"order_id\":\"DEMO-42\",\"status\":\"shipped\"}",
+      "assertionMode": "exact",
+      "components": [
+        {
+          "anchorKey": "tool:lookup_order"
+        }
+      ],
+      "expected": {
+        "checks": [
+          {
+            "id": "required-tool-called",
+            "kind": "deterministic",
+            "assert": "tool_called",
+            "tool": "lookup_order"
+          }
+        ],
+        "checkPolicy": {
+          "minimumScore": 1,
+          "gating": true
+        }
+      }
+    }
+  ]
+}

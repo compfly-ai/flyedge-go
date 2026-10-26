@@ -60,8 +60,8 @@ type InvocationRequest struct {
 type InvocationOptions struct {
 	// Contract is published by the platform before this connection can serve.
 	Contract *InvocationContract `json:"contract,omitempty"`
-	// AllowClientState explicitly permits client-state payloads for this handler.
-	AllowClientState bool                `json:"allow_client_state"`
+	// AllowClientState defaults to true when nil. Set a pointer to false to reject client state.
+	AllowClientState *bool               `json:"allow_client_state"`
 	Name             string              `json:"name"`
 	Environment      string              `json:"environment"`
 	Purposes         []InvocationPurpose `json:"purposes"`
@@ -83,7 +83,12 @@ func (o InvocationOptions) validate() (InvocationOptions, error) {
 	if err != nil {
 		return o, err
 	}
-	if o.Contract != nil && len(o.Contract.State.Fields) > 0 && !o.AllowClientState {
+	allowState := true
+	if o.AllowClientState != nil {
+		allowState = *o.AllowClientState
+	}
+	o.AllowClientState = &allowState
+	if o.Contract != nil && len(o.Contract.State.Fields) > 0 && !*o.AllowClientState {
 		return o, errors.New("flyedge: a state contract requires AllowClientState")
 	}
 	if o.LeaseDuration == 0 {
@@ -411,7 +416,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					reason = "purpose not authorized"
 				} else if c.ContractVersion != "" && r.ContractVersion != c.ContractVersion {
 					reason = "invocation contract version mismatch"
-				} else if r.State != nil && !o.AllowClientState {
+				} else if r.State != nil && !*o.AllowClientState {
 					reason = "client state not authorized"
 				} else if _, duplicate := seen[r.ID]; duplicate {
 					reason = "duplicate invocation"

@@ -35,8 +35,14 @@ func TestInvocationContractValidationAndSnapshot(t *testing.T) {
 			t.Fatalf("accepted %+v", invalid)
 		}
 	}
-	if _, err := (InvocationOptions{Contract: copy}).validate(); err == nil {
-		t.Fatal("state contract must explicitly enable client state")
+	disabled := false
+	options := InvocationOptions{Contract: copy, Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}}
+	if _, err := options.validate(); err != nil {
+		t.Fatalf("state contract should work by default: %v", err)
+	}
+	options.AllowClientState = &disabled
+	if _, err := options.validate(); err == nil {
+		t.Fatal("state contract must reject explicitly disabled client state")
 	}
 }
 
@@ -55,7 +61,7 @@ func TestContractRegistrationRejectsLegacyBrokerWithoutAcknowledgement(t *testin
 		t.Fatal(err)
 	}
 	defer g.Close()
-	_, err = g.ServeInvocations(context.Background(), InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: time.Minute, AllowClientState: true, AllowInsecureLoopback: true, Contract: &InvocationContract{State: StateContract{Fields: map[string]StateField{"order": {Type: StateString}}}}}, func(context.Context, InvocationRequest, InvocationWriter) error { return nil })
+	_, err = g.ServeInvocations(context.Background(), InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: time.Minute, AllowInsecureLoopback: true, Contract: &InvocationContract{State: StateContract{Fields: map[string]StateField{"order": {Type: StateString}}}}}, func(context.Context, InvocationRequest, InvocationWriter) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "did not acknowledge") {
 		t.Fatalf("expected unsupported broker error, got %v", err)
 	}

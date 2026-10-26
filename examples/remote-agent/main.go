@@ -51,12 +51,11 @@ func run() error {
 	// This dedicated simulation example explicitly enables these capabilities.
 	// Ordinary SDK clients still opt in through InvocationOptions.
 	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{
-		Name:             "Remote support example",
-		Environment:      "dev",
-		Purposes:         []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval},
-		LeaseDuration:    *leaseDuration,
-		AutoRenew:        autoRenew,
-		AllowClientState: true,
+		Name:          "Remote support example",
+		Environment:   "dev",
+		Purposes:      []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval},
+		LeaseDuration: *leaseDuration,
+		AutoRenew:     autoRenew,
 		Contract: &flyedge.InvocationContract{State: flyedge.StateContract{Fields: map[string]flyedge.StateField{
 			"current_page":      {Type: flyedge.StateString},
 			"selected_order_id": {Type: flyedge.StateString},

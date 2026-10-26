@@ -59,8 +59,10 @@ go run ./remote-agent
 
 For the local Tilt stack, use `http://127.0.0.1:8080`, set
 `COMPFLY_SIM_TELEMETRY_URL=ws://127.0.0.1:8080/v1/simulation/telemetry` if needed.
-This dedicated example explicitly enables simulation hooks, client state, and
-literal-loopback HTTP in its code. The SDK defaults remain opt-in.
+This dedicated example explicitly enables simulation hooks and literal-loopback
+HTTP in its code. Reverse invocation serving remains explicit. Client state is
+enabled by default; set `InvocationOptions.AllowClientState` to a pointer to
+`false` to disable it. Declaring a state contract requires client state to be enabled.
 The example uses the `dev` agent label in code. `COMPFLY_API_URL` selects the
 local or hosted deployment.
 Unprotected baseline runs are rejected. Use shielded simulation runs.
@@ -74,7 +76,7 @@ SDK output streams over the socket; the Platform adapter buffers the final respo
 Disconnects are terminal with potentially unknown in-flight outcomes: no automatic
 reconnect, retry or replay. Restart explicitly to authorize a new session. Platform
 can revoke the lease; closing the Guard also closes the connection. Cancellation is
-cooperative and cannot undo side effects. No acting-principal/state-profile support yet.
+cooperative and cannot undo side effects. Acting-principal delegation is not supported.
 
 The caller supplies the handler to `Guard.ServeInvocations`; importing the SDK,
 constructing a Guard, and normal `Connect` never expose an invocation handler.
@@ -109,39 +111,35 @@ The temporary identity files are not portable or committed; generate a new ident
 through Platform when recreating the fixture on another machine.
 
 
-### Client state profiles
+### Scenario-owned client state
 
-The example explicitly accepts the platform's existing state profiles in code.
-The application receives logical values in `InvocationRequest.State`
-as `map[string]json.RawMessage`; decode those values into your own types. A nil
-map means no profile; an empty, non-nil map means an explicitly empty profile.
-State is UI/session context, not an authenticated principal or a permission grant.
+The application receives optional logical values in `InvocationRequest.State`
+as `map[string]json.RawMessage`. Decode them into domain objects, protobuf messages,
+or mock application/session context before invoking your agent. Nil means absent;
+a non-nil empty map means explicitly empty state. State does not grant permissions.
 
-The example declares `current_page` and `selected_order_id` as strings and
-`form` as JSON in `InvocationOptions.Contract`. The platform publishes that
-contract when the connection registers; no manual contract configuration is
-needed. In **Starting state → Manage**, expand **SDK-declared state contract**
-to inspect its fields and version. Schema edits belong in the SDK definition;
-profile values remain editable in the platform.
+The example declares `current_page` and `selected_order_id` as strings and `form`
+as JSON in `InvocationOptions.Contract`. Registration publishes the contract;
+schema changes belong in the application and take effect after reconnecting.
+Client state is enabled by default. An explicit `AllowClientState` pointer to false
+rejects state and cannot be combined with a declared state contract.
 
-Registration fails if publication is unavailable or the broker cannot acknowledge
-the contract. Reconnect after changing the schema. Runs pin both their connection
-and contract version; incompatible saved profiles need correction before use.
+In Playground, enable **Supply starting state** and edit the declared fields.
+Unchecked fields are omitted. In datasets, each scenario owns its optional `state`
+object. Values are concrete: no state profiles, merging, defaults, or token
+substitution. Optional strings must be omitted instead of set to null.
 
-Save profiles using the existing profile API, then select `stateProfileId` when
-starting a run or playground conversation. Example profile creation bodies are
-in `profiles/`.
-The SDK handler accepts a selected order ID or `form.order_id`. DEMO-42 returns
-`shipped`; DEMO-43 returns `processing`. An explicitly supplied profile with no
-order fails instead of falling back to DEMO-42. Without a profile, the original
-DEMO-42 behavior is preserved. Logs show the resolved order ID, not the full profile.
+Import `datasets/client-state.json` to exercise both supported application paths:
+selected order DEMO-43 (processing), and form order DEMO-42 (shipped). Start an
+evaluation using that dataset without a state profile. The exact response and
+`lookup_order` trace are checked for each scenario.
 
-The worker validates the profile against the conversation contract and reuses
-its starting values across turns in that session. Separate sessions do not share
-state. Client state requires a new connection advertising support; older SDK
-connections reject state-bearing requests. Revocation, lease renewal, purpose
-restrictions, and policy checks still apply.
+The worker validates state against the pinned contract and retains it across turns
+within that scenario session. Different scenario sessions do not share state.
+Results preserve the submitted state, and the run preserves the contract version.
+With no state, the example retains its DEMO-42 behavior. Explicit state without an
+order fails. Logs show the resolved order ID rather than arbitrary state contents.
 
-Dataset items remain unchanged: do not add `state` to custom-evaluation JSON.
-The earlier `datasets/client-state.proposed.json` is an unsupported design draft,
-not an import payload. Seed-token substitution is not added to profile values.
+Existing profile snapshots remain available in historical runs; new runs use
+scenario-owned state. The files in `profiles/` illustrate the retired profile API
+and should not be supplied to new evaluations.
