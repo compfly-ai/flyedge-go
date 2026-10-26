@@ -29,7 +29,15 @@ func run() error {
 	local := flag.Bool("allow-loopback-http", false, "explicitly allow local HTTP gateway")
 	injection := flag.Bool("allow-simulation-injection", false, "permit simulation mutation hooks on this dedicated agent")
 	environment := flag.String("environment", "dev", "environment exposed to Platform")
+	leaseDuration := flag.Duration("lease-duration", time.Hour, "renewable authorization window (1s–24h)")
+	autoRenew := flag.Bool("auto-renew", true, "renew the lease until stopped or revoked; false makes this a finite session")
+	logFormat := flag.String("log-format", "pretty", "log format: pretty, text, or json")
+	color := flag.String("color", "auto", "terminal colors: auto, always, or never")
 	flag.Parse()
+	logger, err := newExampleLogger(*logFormat, *color)
+	if err != nil {
+		return err
+	}
 	cfg := flyedge.LoadEnv()
 	cfg.FailMode = flyedge.FailClosed
 	g, err := flyedge.New(cfg, flyedge.WithHeartbeat(time.Second), flyedge.WithCloudTelemetry(time.Second))
@@ -42,17 +50,17 @@ func run() error {
 	if err = g.Connect(ctx, flyedge.ManifestInfo{Framework: "flyedge-go/remote-agent", Environment: *environment, Tools: []string{"lookup_order"}, Models: []string{"deterministic-support"}}); err != nil {
 		return err
 	}
-	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{Name: "Remote support example", Environment: *environment, Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval}, Lifetime: time.Hour, AllowInsecureLoopback: *local, AllowSimulationInjection: *injection}, handler(g))
+	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{Name: "Remote support example", Environment: *environment, Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval}, LeaseDuration: *leaseDuration, AutoRenew: autoRenew, AllowInsecureLoopback: *local, AllowSimulationInjection: *injection}, handler(g, logger))
 	if err != nil {
 		return err
 	}
 	defer c.Close()
-	log.Printf("Remote invocation ready: connection=%s expires=%s", c.ID, c.ExpiresAt.Format(time.RFC3339))
+	logger.Info("connection.ready", "connection", c.ID, "lease_duration", *leaseDuration, "auto_renew", *autoRenew, "expires", c.ExpiresAt().Format(time.RFC3339))
 	return c.Wait()
 }
-func handler(g *flyedge.Guard) flyedge.InvocationHandler {
+func handler(g *flyedge.Guard, baseLogger *slog.Logger) flyedge.InvocationHandler {
 	return func(ctx context.Context, r flyedge.InvocationRequest, out flyedge.InvocationWriter) (invocationErr error) {
-		logger := slog.New(slog.NewTextHandler(os.Stderr, nil)).With(
+		logger := baseLogger.With(
 			"invocation", r.ID, "purpose", r.Purpose, "run", r.RunID, "session", r.SessionID,
 		)
 		started := time.Now()

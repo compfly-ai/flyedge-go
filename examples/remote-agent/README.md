@@ -5,14 +5,47 @@ this handler without a public listener or tunnel. This deterministic example use
 one read-only `lookup_order` fixture and real SDK policy checks and telemetry.
 It does not use a model provider; evaluation scores measure the fixture, not model resilience.
 
-The example logs each invocation to stderr: conversation messages, policy stages,
-requested and executed tool calls, raw and governed tool results, and delivered
-output. Every event includes invocation, purpose, run and session IDs; completion
-includes duration, and failures include the stage and error. Content is logged in
-full, including simulation-injected content, so use this with test data. Log values
-are quoted/escaped so multiline input stays within its event.
+The default terminal log is compact and color-coded: input in cyan, tool activity
+in purple, output/completion in green, and failures in red. JSON tool results are
+indented. Invocation IDs are shortened; session and run information appears once
+at the start, instead of repeating the signed session value on every line.
 
-Restart `go run ./remote-agent ...` after changing the example to load the new code.
+- `-color auto` (default) enables colors on a terminal; `NO_COLOR` disables automatic color.
+- `-color always` forces color; `-color never` disables it.
+- `-log-format text` or `-log-format json` preserves full correlation fields for log collection.
+
+Full input and output content is logged, including simulation-injected content;
+use test data. Terminal control characters are escaped. Restart the example to
+load code changes.
+
+## Lease renewal
+
+Calling `ServeInvocations` is the explicit opt-in. The default lease duration is
+one hour and renewal is enabled. The SDK renews the same connection halfway
+through each lease, so a healthy connection keeps running until you cancel its
+context, close the connection/Guard, or Platform revokes it. Renewal does not
+restart handlers or create observability sessions: invocation/session/run IDs
+continue to identify individual work independently of the connection.
+
+```go
+options := flyedge.InvocationOptions{
+    Environment: "dev",
+    Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground},
+    // LeaseDuration: time.Hour, // default; range 1s–24h
+    // AutoRenew: nil,           // default: true
+}
+```
+
+For a finite session, set `AutoRenew` to a pointer to `false`. In this example,
+use `-lease-duration 30m -auto-renew=false`. `-lease-duration 10s` is useful for
+local renewal testing. `connection.ExpiresAt()` returns the latest acknowledged
+lease expiry. The UI labels it as the current lease expiry, not a shutdown time,
+when automatic renewal is enabled.
+
+Renewal requires broker acknowledgement and cannot recreate a revoked/expired
+lease. A lost connection or a lease that cannot be renewed still ends serving;
+there is no automatic reconnect or invocation replay in this version. Changing
+flags/config requires restarting the example; configuration is not hot-reloaded.
 
 Register a dedicated agent and generate its DID identity through Platform. Set:
 

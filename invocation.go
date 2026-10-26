@@ -34,6 +34,7 @@ const (
 	PurposeEval       InvocationPurpose = "eval"
 )
 
+var ErrConnectionExpired = errors.New("flyedge: invocation lease expired")
 var ErrConnectionRevoked = errors.New("flyedge: invocation connection revoked")
 var ErrInvocationOutcomeUnknown = errors.New("flyedge: invocation connection lost; in-flight outcomes may be unknown")
 
@@ -53,11 +54,14 @@ type InvocationRequest struct {
 // InvocationOptions grants only the listed purposes for this serving session.
 // The handler runs with the application's real credentials. This is not a sandbox.
 type InvocationOptions struct {
-	Name           string              `json:"name"`
-	Environment    string              `json:"environment"`
-	Purposes       []InvocationPurpose `json:"purposes"`
-	Lifetime       time.Duration       `json:"-"`
-	RequestTimeout time.Duration       `json:"-"`
+	Name        string              `json:"name"`
+	Environment string              `json:"environment"`
+	Purposes    []InvocationPurpose `json:"purposes"`
+	// LeaseDuration defaults to one hour; renewal keeps the same serving connection alive.
+	LeaseDuration time.Duration `json:"-"`
+	// AutoRenew defaults to true when nil. Set a pointer to false for a finite session.
+	AutoRenew      *bool         `json:"auto_renew,omitempty"`
+	RequestTimeout time.Duration `json:"-"`
 	// AllowInsecureLoopback permits HTTP only to a literal loopback address for local tests.
 	AllowInsecureLoopback bool `json:"-"`
 	// AllowSimulationInjection explicitly permits the existing simulation mutation hooks.
@@ -66,8 +70,16 @@ type InvocationOptions struct {
 }
 
 func (o InvocationOptions) validate() (InvocationOptions, error) {
-	if o.Environment == "" || len(o.Environment) > 64 || len(o.Name) > 128 || len(o.Purposes) == 0 || o.Lifetime < time.Second || o.Lifetime > 24*time.Hour {
-		return o, errors.New("flyedge: environment, purposes and lifetime (1s–24h) are required")
+	if o.LeaseDuration == 0 {
+		o.LeaseDuration = time.Hour
+	}
+	renew := true
+	if o.AutoRenew != nil {
+		renew = *o.AutoRenew
+	}
+	o.AutoRenew = &renew
+	if o.Environment == "" || len(o.Environment) > 64 || len(o.Name) > 128 || len(o.Purposes) == 0 || o.LeaseDuration < time.Second || o.LeaseDuration > 24*time.Hour {
+		return o, errors.New("flyedge: environment, purposes and a valid lease duration (1s–24h) are required")
 	}
 	for _, p := range o.Purposes {
 		if p != PurposePlayground && p != PurposeSimulation && p != PurposeEval {
@@ -91,20 +103,29 @@ type InvocationWriter interface {
 type InvocationHandler func(context.Context, InvocationRequest, InvocationWriter) error
 
 type invocationFrame struct {
-	Type    string             `json:"type"`
-	ID      string             `json:"id,omitempty"`
-	Request *InvocationRequest `json:"request,omitempty"`
-	Text    string             `json:"text,omitempty"`
-	Error   string             `json:"error,omitempty"`
+	Type      string             `json:"type"`
+	ExpiresAt time.Time          `json:"expires_at,omitempty"`
+	ID        string             `json:"id,omitempty"`
+	Request   *InvocationRequest `json:"request,omitempty"`
+	Text      string             `json:"text,omitempty"`
+	Error     string             `json:"error,omitempty"`
 }
 type InvocationConnection struct {
 	ID        string
-	ExpiresAt time.Time
+	expiresAt time.Time
+	leaseMu   sync.RWMutex
 	ws        *websocket.Conn
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
 	err       error // published before done closes
+}
+
+// ExpiresAt returns the latest acknowledged lease expiry. Automatic renewal advances it.
+func (c *InvocationConnection) ExpiresAt() time.Time {
+	c.leaseMu.RLock()
+	defer c.leaseMu.RUnlock()
+	return c.expiresAt
 }
 
 func (c *InvocationConnection) Wait() error { <-c.done; return c.err }
@@ -114,7 +135,8 @@ func (c *InvocationConnection) Wait() error { <-c.done; return c.err }
 func (c *InvocationConnection) Close() error { c.cancel(); _ = c.ws.CloseNow(); <-c.done; return nil }
 
 // ServeInvocations explicitly registers ONE handler and opens an outbound socket.
-// Ordinary New/Connect never call it. V1 serves one invocation at a time and
+// Ordinary New/Connect never call it. Leases renew by default until canceled or revoked.
+// V1 serves one invocation at a time and
 // deliberately does not reconnect/replay after disconnect; call again explicitly
 // for a new serving session. Platform revocation is terminal for this lease.
 func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, handler InvocationHandler) (*InvocationConnection, error) {
@@ -135,10 +157,10 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 	}
 	body, _ := json.Marshal(struct {
 		InvocationOptions
-		Nonce           string `json:"nonce"`
-		LifetimeSeconds int64  `json:"lifetime_seconds"`
-		TimeoutSeconds  int64  `json:"timeout_seconds"`
-	}{opts, randID(), int64(opts.Lifetime / time.Second), int64(opts.RequestTimeout / time.Second)})
+		Nonce                string `json:"nonce"`
+		LeaseDurationSeconds int64  `json:"lease_duration_seconds"`
+		TimeoutSeconds       int64  `json:"timeout_seconds"`
+	}{opts, randID(), int64(opts.LeaseDuration / time.Second), int64(opts.RequestTimeout / time.Second)})
 	registration, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.cfg.APIURL, "/")+"/v1/flyedge/invocations", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -172,7 +194,7 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 	if err = json.Unmarshal(raw, &lease); err != nil {
 		return nil, err
 	}
-	if len(lease.ID) != 32 || strings.IndexFunc(lease.ID, func(r rune) bool { return !strings.ContainsRune("0123456789abcdef", r) }) >= 0 || lease.Token == "" || !lease.ExpiresAt.After(time.Now()) || lease.ExpiresAt.After(time.Now().Add(opts.Lifetime+5*time.Second)) {
+	if len(lease.ID) != 32 || strings.IndexFunc(lease.ID, func(r rune) bool { return !strings.ContainsRune("0123456789abcdef", r) }) >= 0 || lease.Token == "" || !lease.ExpiresAt.After(time.Now()) || lease.ExpiresAt.After(time.Now().Add(opts.LeaseDuration+5*time.Second)) {
 		return nil, errors.New("flyedge: invalid invocation lease")
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/v1/flyedge/invocations/" + lease.ID + "/socket"
@@ -181,7 +203,7 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 	} else {
 		base.Scheme = "ws"
 	}
-	cctx, cancel := context.WithDeadline(ctx, lease.ExpiresAt)
+	cctx, cancel := context.WithCancel(ctx)
 	dialCtx, stopDial := context.WithTimeout(cctx, g.cfg.Timeout)
 	ws, _, err := websocket.Dial(dialCtx, base.String(), &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + lease.Token}}, HTTPClient: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}})
 	stopDial()
@@ -199,7 +221,7 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 		_ = ws.CloseNow()
 		return nil, errors.New("flyedge: invocation connection did not become ready")
 	}
-	c := &InvocationConnection{ID: lease.ID, ExpiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel, done: make(chan struct{})}
+	c := &InvocationConnection{ID: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel, done: make(chan struct{})}
 	g.invocationMu.Lock()
 	if g.invocationClosed {
 		g.invocationMu.Unlock()
@@ -266,7 +288,16 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 	}()
 	var active string
 	var cancelWork context.CancelFunc
-	seen := map[string]bool{}
+	seen := map[string]time.Time{}
+	expiry := time.NewTimer(time.Until(c.ExpiresAt()))
+	defer expiry.Stop()
+	renewal := time.NewTimer(time.Until(c.ExpiresAt()) / 2)
+	defer renewal.Stop()
+	var renewAt <-chan time.Time
+	if *o.AutoRenew {
+		renewAt = renewal.C
+	}
+	pendingRenewal := ""
 	defer func() {
 		if cancelWork != nil {
 			cancelWork()
@@ -274,6 +305,20 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 	}()
 	for {
 		select {
+		case <-expiry.C:
+			c.err = ErrConnectionExpired
+			return
+		case <-renewAt:
+			pendingRenewal = randID()
+			deadline, stop := context.WithDeadline(c.ctx, c.ExpiresAt())
+			err := c.send(deadline, invocationFrame{Type: "renew", ID: pendingRenewal})
+			stop()
+			if err != nil {
+				c.err = ErrInvocationOutcomeUnknown
+				return
+			}
+			// Never extend locally without the broker's acknowledgement. Missing ack expires.
+			renewAt = nil
 		case <-c.ctx.Done():
 			c.err = c.ctx.Err()
 			return
@@ -299,6 +344,21 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 			}
 		case f := <-frames:
 			switch f.Type {
+			case "renewed":
+				if pendingRenewal == "" || f.ID != pendingRenewal || !f.ExpiresAt.After(c.ExpiresAt()) || f.ExpiresAt.After(time.Now().Add(o.LeaseDuration+5*time.Second)) || !time.Now().Before(c.ExpiresAt()) {
+					c.err = errors.New("flyedge: invalid lease renewal acknowledgement")
+					return
+				}
+				c.leaseMu.Lock()
+				c.expiresAt = f.ExpiresAt
+				c.leaseMu.Unlock()
+				expiry.Reset(time.Until(f.ExpiresAt))
+				renewal.Reset(time.Until(f.ExpiresAt) / 2)
+				renewAt = renewal.C
+				pendingRenewal = ""
+			case "expired":
+				c.err = ErrConnectionExpired
+				return
 			case "revoked":
 				c.err = ErrConnectionRevoked
 				return
@@ -321,7 +381,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				}
 				if !permitted {
 					reason = "purpose not authorized"
-				} else if seen[r.ID] {
+				} else if _, duplicate := seen[r.ID]; duplicate {
 					reason = "duplicate invocation"
 				} else if active != "" {
 					reason = "handler busy"
@@ -346,11 +406,22 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					}
 					continue
 				}
+				// Expired request IDs cannot be replayed because their deadline is checked above.
 				if len(seen) >= 10000 {
-					c.err = errors.New("flyedge: serving session invocation limit reached")
-					return
+					for id, deadline := range seen {
+						if !deadline.After(time.Now()) {
+							delete(seen, id)
+						}
+					}
 				}
-				seen[r.ID] = true
+				if len(seen) >= 10000 {
+					if c.send(c.ctx, invocationFrame{Type: "failed", ID: r.ID, Error: "invocation replay window full"}) != nil {
+						c.err = ErrInvocationOutcomeUnknown
+						return
+					}
+					continue
+				}
+				seen[r.ID] = r.Deadline
 				deadline := r.Deadline
 				if limit := time.Now().Add(o.RequestTimeout); deadline.After(limit) {
 					deadline = limit

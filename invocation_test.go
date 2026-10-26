@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/compfly-ai/flyedge-go/simulation"
@@ -23,7 +24,7 @@ func TestInvocationRequiresExplicitIdentityAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer g.Close()
-	_, err = g.ServeInvocations(context.Background(), InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, Lifetime: time.Minute}, func(context.Context, InvocationRequest, InvocationWriter) error { return nil })
+	_, err = g.ServeInvocations(context.Background(), InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: time.Minute}, func(context.Context, InvocationRequest, InvocationWriter) error { return nil })
 	if err == nil {
 		t.Fatal("unsigned guard must not expose an invocation handler")
 	}
@@ -32,9 +33,9 @@ func TestInvocationRequiresExplicitIdentityAndScope(t *testing.T) {
 func TestInvocationOptionsRejectImplicitScope(t *testing.T) {
 	for _, opts := range []InvocationOptions{
 		{},
-		{Environment: "dev", Lifetime: time.Minute},
-		{Environment: "dev", Purposes: []InvocationPurpose{"unknown"}, Lifetime: time.Minute},
-		{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, Lifetime: 25 * time.Hour},
+		{Environment: "dev", LeaseDuration: time.Minute},
+		{Environment: "dev", Purposes: []InvocationPurpose{"unknown"}, LeaseDuration: time.Minute},
+		{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: 25 * time.Hour},
 	} {
 		if _, err := opts.validate(); err == nil {
 			t.Fatalf("accepted invalid scope: %+v", opts)
@@ -43,6 +44,9 @@ func TestInvocationOptionsRejectImplicitScope(t *testing.T) {
 }
 
 func invocationFixture(t *testing.T, peer func(context.Context, *websocket.Conn)) (*Guard, *InvocationConnection) {
+	return invocationLeaseFixture(t, time.Minute, nil, peer)
+}
+func invocationLeaseFixture(t *testing.T, duration time.Duration, autoRenew *bool, peer func(context.Context, *websocket.Conn)) (*Guard, *InvocationConnection) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
@@ -54,7 +58,7 @@ func invocationFixture(t *testing.T, peer func(context.Context, *websocket.Conn)
 			if r.Header.Get("X-CompFly-Signature") == "" {
 				t.Error("missing DID signature")
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": strings.Repeat("a", 32), "token": "test-token", "expires_at": time.Now().Add(time.Minute)})
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": strings.Repeat("a", 32), "token": "test-token", "expires_at": time.Now().Add(duration)})
 			return
 		}
 		if r.Header.Get("Authorization") != "Bearer test-token" {
@@ -75,7 +79,7 @@ func invocationFixture(t *testing.T, peer func(context.Context, *websocket.Conn)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { g.Close() })
-	c, err := g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, Lifetime: time.Minute, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, w InvocationWriter) error {
+	c, err := g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: duration, AutoRenew: autoRenew, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, w InvocationWriter) error {
 		if r.SessionID != "session" || sessionFromContext(ctx) != "session" {
 			return errors.New("missing session context")
 		}
@@ -155,5 +159,72 @@ func TestRemoteInvocationCannotBypassProtectionDuringBaseline(t *testing.T) {
 	dec, err := g.Check(ctx, CheckRequest{Stage: StagePreLLM, Content: Content{Full: "hello"}})
 	if err == nil || dec.Reason != "remote_simulation_not_authorized" {
 		t.Fatalf("baseline escaped remote scope: %+v %v", dec, err)
+	}
+}
+
+func TestInvocationLeaseDefaults(t *testing.T) {
+	o, err := (InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}}).validate()
+	if err != nil || o.LeaseDuration != time.Hour || o.AutoRenew == nil || !*o.AutoRenew {
+		t.Fatalf("defaults: %+v %v", o, err)
+	}
+	finite := false
+	o, err = (InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, AutoRenew: &finite}).validate()
+	if err != nil || *o.AutoRenew {
+		t.Fatalf("finite: %+v %v", o, err)
+	}
+}
+func TestInvocationRenewsAcrossOriginalExpiryThenRevokes(t *testing.T) {
+	started := time.Now()
+	_, c := invocationLeaseFixture(t, time.Second, nil, func(ctx context.Context, ws *websocket.Conn) {
+		// Hold an active handler across multiple renewals; it must not be canceled by the original expiry.
+		sendInvocation(ctx, ws, "long", "wait", PurposePlayground)
+		for i := 0; i < 3; i++ {
+			var f invocationFrame
+			if err := wsjson.Read(ctx, ws, &f); err != nil || f.Type != "renew" || f.ID == "" {
+				t.Errorf("renewal %d: %+v %v", i, f, err)
+				return
+			}
+			_ = wsjson.Write(ctx, ws, invocationFrame{Type: "renewed", ID: f.ID, ExpiresAt: time.Now().Add(time.Second)})
+		}
+		_ = wsjson.Write(ctx, ws, invocationFrame{Type: "cancel", ID: "long"})
+		var f invocationFrame
+		if err := wsjson.Read(ctx, ws, &f); err != nil || f.Type != "failed" || f.Error != context.Canceled.Error() {
+			t.Errorf("handler did not survive renewal: %+v %v", f, err)
+		}
+		sendInvocation(ctx, ws, "after", "hello", PurposePlayground)
+		for _, kind := range []string{"delta", "completed"} {
+			if err := wsjson.Read(ctx, ws, &f); err != nil || f.Type != kind {
+				t.Errorf("post-expiry invocation: %+v %v", f, err)
+			}
+		}
+		_ = wsjson.Write(ctx, ws, invocationFrame{Type: "revoked"})
+		_, _, _ = ws.Read(ctx)
+	})
+	if err := c.Wait(); !errors.Is(err, ErrConnectionRevoked) {
+		t.Fatal(err)
+	}
+	if time.Since(started) < time.Second || !c.ExpiresAt().After(started.Add(time.Second)) {
+		t.Fatal("lease did not advance")
+	}
+}
+func TestInvocationFiniteLeaseAndMissingAcknowledgementExpire(t *testing.T) {
+	for _, auto := range []bool{false, true} {
+		t.Run(fmt.Sprint(auto), func(t *testing.T) {
+			_, c := invocationLeaseFixture(t, time.Second, &auto, func(ctx context.Context, ws *websocket.Conn) {
+				var f invocationFrame
+				err := wsjson.Read(ctx, ws, &f)
+				if auto {
+					if err != nil || f.Type != "renew" {
+						t.Errorf("expected renewal: %+v %v", f, err)
+					}
+					_, _, _ = ws.Read(ctx) // No ack: the SDK must not extend its own authorization.
+				} else if err == nil {
+					t.Errorf("finite session sent a frame: %+v", f)
+				}
+			})
+			if err := c.Wait(); !errors.Is(err, ErrConnectionExpired) {
+				t.Fatalf("expected expiry, got %v", err)
+			}
+		})
 	}
 }
