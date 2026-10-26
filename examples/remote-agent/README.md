@@ -61,8 +61,8 @@ For the local Tilt stack, use `http://127.0.0.1:8080`, set
 `COMPFLY_SIM_TELEMETRY_URL=ws://127.0.0.1:8080/v1/simulation/telemetry` if needed.
 This dedicated example explicitly enables simulation hooks, client state, and
 literal-loopback HTTP in its code. The SDK defaults remain opt-in.
-`-environment` labels the agent in Platform and defaults to `dev`; it does not
-select the deployment. `COMPFLY_API_URL` selects the local or hosted deployment.
+The example uses the `dev` agent label in code. `COMPFLY_API_URL` selects the
+local or hosted deployment.
 Unprotected baseline runs are rejected. Use shielded simulation runs.
 
 Platform discovers the lease by authenticated organization, agent slug, environment

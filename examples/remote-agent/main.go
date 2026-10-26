@@ -27,7 +27,6 @@ func main() {
 	}
 }
 func run() error {
-	environment := flag.String("environment", "dev", "agent environment label in Platform (deployment URL comes from COMPFLY_API_URL)")
 	leaseDuration := flag.Duration("lease-duration", time.Hour, "renewable authorization window (1s–24h)")
 	autoRenew := flag.Bool("auto-renew", true, "renew the lease until stopped or revoked; false makes this a finite session")
 	logFormat := flag.String("log-format", "pretty", "log format: pretty, text, or json")
@@ -46,14 +45,14 @@ func run() error {
 	defer g.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err = g.Connect(ctx, flyedge.ManifestInfo{Framework: "flyedge-go/remote-agent", Environment: *environment, Tools: []string{"lookup_order"}, Models: []string{"deterministic-support"}}); err != nil {
+	if err = g.Connect(ctx, flyedge.ManifestInfo{Framework: "flyedge-go/remote-agent", Environment: "dev", Tools: []string{"lookup_order"}, Models: []string{"deterministic-support"}}); err != nil {
 		return err
 	}
 	// This dedicated simulation example explicitly enables these capabilities.
 	// Ordinary SDK clients still opt in through InvocationOptions.
 	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{
 		Name:                     "Remote support example",
-		Environment:              *environment,
+		Environment:              "dev",
 		Purposes:                 []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval},
 		LeaseDuration:            *leaseDuration,
 		AutoRenew:                autoRenew,
