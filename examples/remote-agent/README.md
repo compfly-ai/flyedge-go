@@ -5,6 +5,15 @@ this handler without a public listener or tunnel. This deterministic example use
 one read-only `lookup_order` fixture and real SDK policy checks and telemetry.
 It does not use a model provider; evaluation scores measure the fixture, not model resilience.
 
+The example logs each invocation to stderr: conversation messages, policy stages,
+requested and executed tool calls, raw and governed tool results, and delivered
+output. Every event includes invocation, purpose, run and session IDs; completion
+includes duration, and failures include the stage and error. Content is logged in
+full, including simulation-injected content, so use this with test data. Log values
+are quoted/escaped so multiline input stays within its event.
+
+Restart `go run ./remote-agent ...` after changing the example to load the new code.
+
 Register a dedicated agent and generate its DID identity through Platform. Set:
 
 ```sh
