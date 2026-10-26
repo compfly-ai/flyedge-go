@@ -105,3 +105,36 @@ go run ./remote-agent -environment dev -allow-loopback-http -allow-simulation-in
 Run from the `examples` directory with the local stack up. Ctrl+C stops serving.
 The temporary identity files are not portable or committed; generate a new identity
 through Platform when recreating the fixture on another machine.
+
+
+### Client state profiles
+
+Start with `-allow-client-state` to explicitly accept the platform's existing
+state profiles. The application receives logical values in `InvocationRequest.State`
+as `map[string]json.RawMessage`; decode those values into your own types. A nil
+map means no profile; an empty, non-nil map means an explicitly empty profile.
+State is UI/session context, not an authenticated principal or a permission grant.
+
+Use the existing agent conversation contract to declare these state fields:
+
+```json
+{"fields":{"current_page":{"type":"string"},"selected_order_id":{"type":"json"},"form":{"type":"json"}}}
+```
+
+That object is the `state` portion of the conversation contract. Save profiles
+using the existing profile API, then select `stateProfileId` when starting a run
+or a playground conversation. Example profile creation bodies are in `profiles/`.
+The SDK handler accepts a selected order ID or `form.order_id`. DEMO-42 returns
+`shipped`; DEMO-43 returns `processing`. An explicitly supplied profile with no
+order fails instead of falling back to DEMO-42. Without a profile, the original
+DEMO-42 behavior is preserved. Logs show the resolved order ID, not the full profile.
+
+The worker validates the profile against the conversation contract and reuses
+its starting values across turns in that session. Separate sessions do not share
+state. Client state requires a new connection advertising support; older SDK
+connections reject state-bearing requests. Revocation, lease renewal, purpose
+restrictions, and policy checks still apply.
+
+Dataset items remain unchanged: do not add `state` to custom-evaluation JSON.
+The earlier `datasets/client-state.proposed.json` is an unsupported design draft,
+not an import payload. Seed-token substitution is not added to profile values.

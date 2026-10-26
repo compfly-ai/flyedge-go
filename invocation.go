@@ -43,20 +43,25 @@ type InvocationMessage struct {
 	Content string `json:"content"`
 }
 type InvocationRequest struct {
-	ID        string              `json:"id"`
-	Purpose   InvocationPurpose   `json:"purpose"`
-	Messages  []InvocationMessage `json:"messages"`
-	SessionID string              `json:"session_id"`
-	RunID     string              `json:"run_id,omitempty"`
-	Deadline  time.Time           `json:"deadline"`
+	// State contains client-owned UI/session context, never authorization claims.
+	// Nil means absent; a non-nil empty map means an explicitly empty profile.
+	State     map[string]json.RawMessage `json:"state,omitempty"`
+	ID        string                     `json:"id"`
+	Purpose   InvocationPurpose          `json:"purpose"`
+	Messages  []InvocationMessage        `json:"messages"`
+	SessionID string                     `json:"session_id"`
+	RunID     string                     `json:"run_id,omitempty"`
+	Deadline  time.Time                  `json:"deadline"`
 }
 
 // InvocationOptions grants only the listed purposes for this serving session.
 // The handler runs with the application's real credentials. This is not a sandbox.
 type InvocationOptions struct {
-	Name        string              `json:"name"`
-	Environment string              `json:"environment"`
-	Purposes    []InvocationPurpose `json:"purposes"`
+	// AllowClientState explicitly permits client-state payloads for this handler.
+	AllowClientState bool                `json:"allow_client_state"`
+	Name             string              `json:"name"`
+	Environment      string              `json:"environment"`
+	Purposes         []InvocationPurpose `json:"purposes"`
 	// LeaseDuration defaults to one hour; renewal keeps the same serving connection alive.
 	LeaseDuration time.Duration `json:"-"`
 	// AutoRenew defaults to true when nil. Set a pointer to false for a finite session.
@@ -388,6 +393,8 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				}
 				if !permitted {
 					reason = "purpose not authorized"
+				} else if r.State != nil && !o.AllowClientState {
+					reason = "client state not authorized"
 				} else if _, duplicate := seen[r.ID]; duplicate {
 					reason = "duplicate invocation"
 				} else if active != "" {

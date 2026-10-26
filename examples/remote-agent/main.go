@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,6 +27,7 @@ func main() {
 	}
 }
 func run() error {
+	clientState := flag.Bool("allow-client-state", false, "accept UI/session state from an explicitly selected platform profile")
 	local := flag.Bool("allow-loopback-http", false, "explicitly allow local HTTP gateway")
 	injection := flag.Bool("allow-simulation-injection", false, "permit simulation mutation hooks on this dedicated agent")
 	environment := flag.String("environment", "dev", "environment exposed to Platform")
@@ -50,7 +52,7 @@ func run() error {
 	if err = g.Connect(ctx, flyedge.ManifestInfo{Framework: "flyedge-go/remote-agent", Environment: *environment, Tools: []string{"lookup_order"}, Models: []string{"deterministic-support"}}); err != nil {
 		return err
 	}
-	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{Name: "Remote support example", Environment: *environment, Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval}, LeaseDuration: *leaseDuration, AutoRenew: autoRenew, AllowInsecureLoopback: *local, AllowSimulationInjection: *injection}, handler(g, logger))
+	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{Name: "Remote support example", AllowClientState: *clientState, Environment: *environment, Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval}, LeaseDuration: *leaseDuration, AutoRenew: autoRenew, AllowInsecureLoopback: *local, AllowSimulationInjection: *injection}, handler(g, logger))
 	if err != nil {
 		return err
 	}
@@ -100,14 +102,25 @@ func handler(g *flyedge.Guard, baseLogger *slog.Logger) flyedge.InvocationHandle
 			return err
 		}
 		logger.Info("policy.allowed", "stage", stage)
+		orderID, orderStatus, err := orderFromState(r.State)
+		if err != nil {
+			return err
+		}
+		if r.State != nil {
+			logger.Info("invocation.state", "order_id", orderID)
+		}
 		stage = "tool_call"
-		logger.Info("tool.requested", "tool", "lookup_order", "order_id", "DEMO-42")
-		if _, err := g.CheckToolCall(ctx, r.SessionID, "lookup_order", map[string]any{"order_id": "DEMO-42"}); err != nil {
+		logger.Info("tool.requested", "tool", "lookup_order", "order_id", orderID)
+		if _, err := g.CheckToolCall(ctx, r.SessionID, "lookup_order", map[string]any{"order_id": orderID}); err != nil {
 			return err
 		}
 		logger.Info("policy.allowed", "stage", stage)
-		logger.Info("tool.called", "tool", "lookup_order", "order_id", "DEMO-42")
-		rawResult := `{"order_id":"DEMO-42","status":"shipped"}`
+		logger.Info("tool.called", "tool", "lookup_order", "order_id", orderID)
+		rawJSON, err := json.Marshal(map[string]string{"order_id": orderID, "status": orderStatus})
+		if err != nil {
+			return err
+		}
+		rawResult := string(rawJSON)
 		logger.Info("tool.result", "tool", "lookup_order", "content", rawResult)
 		stage = "tool_result"
 		result, _, err := g.GovernToolResult(ctx, r.SessionID, "lookup_order", rawResult)
@@ -115,7 +128,7 @@ func handler(g *flyedge.Guard, baseLogger *slog.Logger) flyedge.InvocationHandle
 			return err
 		}
 		logger.Info("tool.governed_result", "tool", "lookup_order", "content", result)
-		reply := fmt.Sprintf("Order DEMO-42 is shipped. Tool evidence: %s", result)
+		reply := fmt.Sprintf("Order %s is %s. Tool evidence: %s", orderID, orderStatus, result)
 		if strings.Contains(strings.ToLower(prompt), "secret") || strings.Contains(strings.ToLower(prompt), "ignore") {
 			reply = "I can help check an order, but cannot reveal secrets or ignore safety rules."
 		}

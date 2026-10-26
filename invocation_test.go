@@ -13,6 +13,7 @@ import (
 	"github.com/compfly-ai/flyedge-go/simulation"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,9 @@ func invocationFixture(t *testing.T, peer func(context.Context, *websocket.Conn)
 	return invocationLeaseFixture(t, time.Minute, nil, peer)
 }
 func invocationLeaseFixture(t *testing.T, duration time.Duration, autoRenew *bool, peer func(context.Context, *websocket.Conn)) (*Guard, *InvocationConnection) {
+	return invocationStateFixture(t, duration, autoRenew, false, peer)
+}
+func invocationStateFixture(t *testing.T, duration time.Duration, autoRenew *bool, allowState bool, peer func(context.Context, *websocket.Conn)) (*Guard, *InvocationConnection) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
@@ -79,13 +83,20 @@ func invocationLeaseFixture(t *testing.T, duration time.Duration, autoRenew *boo
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { g.Close() })
-	c, err := g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: duration, AutoRenew: autoRenew, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, w InvocationWriter) error {
+	c, err := g.ServeInvocations(ctx, InvocationOptions{AllowClientState: allowState, Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: duration, AutoRenew: autoRenew, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, w InvocationWriter) error {
 		if r.SessionID != "session" || sessionFromContext(ctx) != "session" {
 			return errors.New("missing session context")
 		}
 		if r.Messages[0].Content == "wait" {
 			<-ctx.Done()
 			return ctx.Err()
+		}
+		if r.State != nil {
+			data, err := json.Marshal(r.State)
+			if err != nil {
+				return err
+			}
+			return w.TextDelta(ctx, string(data))
 		}
 		return w.TextDelta(ctx, "hello")
 	})
@@ -224,6 +235,47 @@ func TestInvocationFiniteLeaseAndMissingAcknowledgementExpire(t *testing.T) {
 			})
 			if err := c.Wait(); !errors.Is(err, ErrConnectionExpired) {
 				t.Fatalf("expected expiry, got %v", err)
+			}
+		})
+	}
+}
+
+func TestClientStateRequiresOptInAndPreservesTypes(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		t.Run(fmt.Sprint(allow), func(t *testing.T) {
+			_, c := invocationStateFixture(t, time.Minute, nil, allow, func(ctx context.Context, ws *websocket.Conn) {
+				for i, state := range []string{`{}`, `{"form":{"enabled":false,"count":2,"selected":null}}`} {
+					request := map[string]any{"id": fmt.Sprint(i), "purpose": "playground", "session_id": "session", "messages": []InvocationMessage{{Role: "user", Content: "hello"}}, "deadline": time.Now().Add(time.Minute), "state": json.RawMessage(state)}
+					if err := wsjson.Write(ctx, ws, map[string]any{"type": "invoke", "request": request}); err != nil {
+						t.Error(err)
+						return
+					}
+					var f invocationFrame
+					if err := wsjson.Read(ctx, ws, &f); err != nil {
+						t.Error(err)
+						return
+					}
+					if !allow {
+						if f.Type != "failed" || f.Error != "client state not authorized" {
+							t.Errorf("unexpected rejection: %+v", f)
+						}
+					} else {
+						var actual, expected any
+						_ = json.Unmarshal([]byte(f.Text), &actual)
+						_ = json.Unmarshal([]byte(state), &expected)
+						if f.Type != "delta" || !reflect.DeepEqual(actual, expected) {
+							t.Errorf("state lost: %+v", f)
+						}
+						if err := wsjson.Read(ctx, ws, &f); err != nil || f.Type != "completed" {
+							t.Errorf("completion: %+v %v", f, err)
+						}
+					}
+				}
+				_ = wsjson.Write(ctx, ws, invocationFrame{Type: "revoked"})
+				_, _, _ = ws.Read(ctx)
+			})
+			if !errors.Is(c.Wait(), ErrConnectionRevoked) {
+				t.Fatal(c.Wait())
 			}
 		})
 	}
