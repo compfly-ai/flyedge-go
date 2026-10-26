@@ -59,3 +59,14 @@ browser upload picker still needs manual user verification because Chrome file
 URL access is disabled. The pre-existing local audit bridge duplicates some
 policy denial rows; one carries the media context. No platform source changes,
 commits, PRs or cloud rollout were made for this Go validation.
+
+## Applied-setting acknowledgment
+
+With platform PR #279, config polling reads the authoritative saved preference
+instead of the LEAD/Redis copy. The SDK rejects older `agent_settings_revision`
+values and sends `X-Agent-Payload-Revision` after applying a revision, while the
+snapshot is valid. Missing settings revoke permission and acknowledgment while
+retaining the revision high-watermark. The console distinguishes saved/pending
+from acknowledgment by one SDK instance; it does not claim every instance has
+refreshed. Explicit `WithAttachments` is independent and never acknowledges a
+remote preference. Backend/Prism and SDK rollout is required for confirmation.

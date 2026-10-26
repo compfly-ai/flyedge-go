@@ -359,3 +359,39 @@ func TestTypedToolInputMediaInspected(t *testing.T) {
 		}
 	}
 }
+
+func TestMediaSettingsAcknowledgmentAndRevisionOrdering(t *testing.T) {
+	g := mediaGuard(t, &mediaChecker{}, FailOpen)
+	apply := func(revision uint64, value string) {
+		g.applyConfig(flyedgeConfigResponse{AgentSlug: "support", NamespaceID: "ns", AgentSettingsRevision: &revision, AgentSettings: map[string]any{"nontext_payload": value}})
+	}
+	assert := func(allowed bool, ack string) {
+		t.Helper()
+		if g.NontextPayloadAllowed() != allowed || g.heartbeatHeaders()["X-Agent-Payload-Revision"] != ack {
+			t.Fatalf("allowed=%v headers=%v", g.NontextPayloadAllowed(), g.heartbeatHeaders())
+		}
+	}
+	apply(1, "allowed")
+	assert(true, "1")
+	apply(2, "denied")
+	assert(false, "2")
+	apply(1, "allowed")
+	assert(false, "2")
+	// An unavailable source disables capture and clears acknowledgment, retaining the high-watermark.
+	g.applyConfig(flyedgeConfigResponse{})
+	assert(false, "")
+	apply(1, "allowed")
+	assert(false, "")
+	allowMedia(g)
+	assert(false, "")
+	apply(3, "allowed")
+	assert(true, "3")
+	g.pollMu.Lock()
+	g.nontextExpires = time.Now().Add(-time.Second)
+	g.pollMu.Unlock()
+	assert(false, "")
+	// Explicit attachment mode is independent of the remote preference and must not acknowledge it.
+	g.nontextAlways = true
+	apply(4, "denied")
+	assert(true, "")
+}

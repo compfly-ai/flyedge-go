@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
@@ -42,6 +43,7 @@ type SimulationConfig struct {
 // flyedgeConfigResponse is the GET /v1/flyedge/config body. All fields are optional (prism omits
 // them when null).
 type flyedgeConfigResponse struct {
+	AgentSettingsRevision    *uint64           `json:"agent_settings_revision,omitempty"`
 	AgentSettings            map[string]any    `json:"agent_settings,omitempty"`
 	AgentSlug                string            `json:"agent_slug,omitempty"`
 	NamespaceID              string            `json:"namespace_id,omitempty"`
@@ -158,9 +160,22 @@ func (g *Guard) applyConfig(cr flyedgeConfigResponse) {
 	if ttl > 900*time.Second {
 		ttl = 900 * time.Second
 	}
-	g.nontextAllowed = g.DID() != "" && cr.AgentSlug != "" && cr.NamespaceID != "" && cr.AgentSettings["nontext_payload"] == "allowed"
-	g.nontextDID = g.DID()
-	g.nontextExpires = time.Now().Add(ttl)
+	if g.nontextDID != g.DID() {
+		g.nontextRevision = 0
+	}
+	// Ignore stale media settings without suppressing unrelated config updates.
+	if cr.AgentSettingsRevision == nil || *cr.AgentSettingsRevision >= g.nontextRevision {
+		g.nontextAckRevision = 0
+		if cr.AgentSettingsRevision != nil {
+			g.nontextRevision = *cr.AgentSettingsRevision
+			if g.DID() != "" && cr.AgentSlug != "" && cr.NamespaceID != "" && cr.AgentSettings != nil && !g.nontextAlways {
+				g.nontextAckRevision = *cr.AgentSettingsRevision
+			}
+		}
+		g.nontextAllowed = (g.nontextRevision == 0 || cr.AgentSettingsRevision != nil) && g.DID() != "" && cr.AgentSlug != "" && cr.NamespaceID != "" && cr.AgentSettings["nontext_payload"] == "allowed"
+		g.nontextDID = g.DID()
+		g.nontextExpires = time.Now().Add(ttl)
+	}
 	g.pollMu.Unlock()
 	if cr.ModelMode != nil {
 		nm := ModelMode(*cr.ModelMode)
@@ -209,13 +224,14 @@ func (g *Guard) NontextPayloadAllowed() bool {
 // (refreshes presence TTL), the current manifest hash (drift compare), and the hostname.
 func (g *Guard) heartbeatHeaders() map[string]string {
 	g.pollMu.RLock()
-	mh := g.manifestHash
-	g.pollMu.RUnlock()
-	return map[string]string{
-		"X-Agent-Heartbeat":     "1",
-		"X-Agent-Manifest-Hash": mh,
-		"X-Agent-Hostname":      g.hostname,
+	defer g.pollMu.RUnlock()
+	headers := map[string]string{
+		"X-Agent-Heartbeat": "1", "X-Agent-Manifest-Hash": g.manifestHash, "X-Agent-Hostname": g.hostname,
 	}
+	if g.nontextAckRevision > 0 && g.nontextDID == g.DID() && time.Now().Before(g.nontextExpires) {
+		headers["X-Agent-Payload-Revision"] = strconv.FormatUint(g.nontextAckRevision, 10)
+	}
+	return headers
 }
 
 // hashSim is a stable content hash of the simulation block, so applyConfig fires the sim hook only
