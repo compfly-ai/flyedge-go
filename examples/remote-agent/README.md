@@ -54,13 +54,15 @@ export COMPFLY_API_URL=https://your-prism
 export COMPFLY_AGENT_DID=did:compfly:...
 export COMPFLY_AGENT_PRIVATE_KEY_PATH=/private/path/agent.pem
 cd examples
-go run ./remote-agent -environment dev
+go run ./remote-agent
 ```
 
 For the local Tilt stack, use `http://127.0.0.1:8080`, set
-`COMPFLY_SIM_TELEMETRY_URL=ws://127.0.0.1:8080/v1/simulation/telemetry` if needed,
-and explicitly pass `-allow-loopback-http -allow-simulation-injection`.
-The injection flag permits the existing simulation hooks on this dedicated process.
+`COMPFLY_SIM_TELEMETRY_URL=ws://127.0.0.1:8080/v1/simulation/telemetry` if needed.
+This dedicated example explicitly enables simulation hooks, client state, and
+literal-loopback HTTP in its code. The SDK defaults remain opt-in.
+`-environment` labels the agent in Platform and defaults to `dev`; it does not
+select the deployment. `COMPFLY_API_URL` selects the local or hosted deployment.
 Unprotected baseline runs are rejected. Use shielded simulation runs.
 
 Platform discovers the lease by authenticated organization, agent slug, environment
@@ -99,7 +101,7 @@ export COMPFLY_API_URL=http://127.0.0.1:8080
 export COMPFLY_AGENT_DID="$(cat /tmp/compfly-remote-invocation/agent.did)"
 export COMPFLY_AGENT_PRIVATE_KEY_PATH=/tmp/compfly-remote-invocation/agent.pem
 export COMPFLY_SIM_TELEMETRY_URL=ws://127.0.0.1:8080/v1/simulation/telemetry
-go run ./remote-agent -environment dev -allow-loopback-http -allow-simulation-injection
+go run ./remote-agent
 ```
 
 Run from the `examples` directory with the local stack up. Ctrl+C stops serving.
@@ -109,8 +111,8 @@ through Platform when recreating the fixture on another machine.
 
 ### Client state profiles
 
-Start with `-allow-client-state` to explicitly accept the platform's existing
-state profiles. The application receives logical values in `InvocationRequest.State`
+The example explicitly accepts the platform's existing state profiles in code.
+The application receives logical values in `InvocationRequest.State`
 as `map[string]json.RawMessage`; decode those values into your own types. A nil
 map means no profile; an empty, non-nil map means an explicitly empty profile.
 State is UI/session context, not an authenticated principal or a permission grant.

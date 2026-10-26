@@ -27,10 +27,7 @@ func main() {
 	}
 }
 func run() error {
-	clientState := flag.Bool("allow-client-state", false, "accept UI/session state from an explicitly selected platform profile")
-	local := flag.Bool("allow-loopback-http", false, "explicitly allow local HTTP gateway")
-	injection := flag.Bool("allow-simulation-injection", false, "permit simulation mutation hooks on this dedicated agent")
-	environment := flag.String("environment", "dev", "environment exposed to Platform")
+	environment := flag.String("environment", "dev", "agent environment label in Platform (deployment URL comes from COMPFLY_API_URL)")
 	leaseDuration := flag.Duration("lease-duration", time.Hour, "renewable authorization window (1s–24h)")
 	autoRenew := flag.Bool("auto-renew", true, "renew the lease until stopped or revoked; false makes this a finite session")
 	logFormat := flag.String("log-format", "pretty", "log format: pretty, text, or json")
@@ -52,7 +49,19 @@ func run() error {
 	if err = g.Connect(ctx, flyedge.ManifestInfo{Framework: "flyedge-go/remote-agent", Environment: *environment, Tools: []string{"lookup_order"}, Models: []string{"deterministic-support"}}); err != nil {
 		return err
 	}
-	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{Name: "Remote support example", AllowClientState: *clientState, Environment: *environment, Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval}, LeaseDuration: *leaseDuration, AutoRenew: autoRenew, AllowInsecureLoopback: *local, AllowSimulationInjection: *injection}, handler(g, logger))
+	// This dedicated simulation example explicitly enables these capabilities.
+	// Ordinary SDK clients still opt in through InvocationOptions.
+	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{
+		Name:                     "Remote support example",
+		Environment:              *environment,
+		Purposes:                 []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval},
+		LeaseDuration:            *leaseDuration,
+		AutoRenew:                autoRenew,
+		AllowClientState:         true,
+		AllowSimulationInjection: true,
+		// Local Tilt uses HTTP. The SDK limits this exception to literal loopback addresses.
+		AllowInsecureLoopback: true,
+	}, handler(g, logger))
 	if err != nil {
 		return err
 	}
