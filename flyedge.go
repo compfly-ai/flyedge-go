@@ -97,12 +97,15 @@ func AsKillSwitchError(err error) (*KillSwitchError, bool) {
 
 // Guard is the protection handle. Construct once with New, pass it explicitly, Close when done.
 type Guard struct {
-	cfg            Config
-	signer         identity.Signer
-	enforcer       enforce.Enforcer
-	tel            telemetry.Telemetry
-	cloudTelemetry bool          // WithCloudTelemetry: ship events to /v1/flyedge/telemetry
-	telInterval    time.Duration // flush interval for cloud telemetry
+	invocationMu     sync.Mutex
+	invocations      []*InvocationConnection
+	invocationClosed bool
+	cfg              Config
+	signer           identity.Signer
+	enforcer         enforce.Enforcer
+	tel              telemetry.Telemetry
+	cloudTelemetry   bool          // WithCloudTelemetry: ship events to /v1/flyedge/telemetry
+	telInterval      time.Duration // flush interval for cloud telemetry
 
 	// Config heartbeat poller: an owned goroutine started by Connect and stopped by
 	// Close. It GETs /v1/flyedge/config on an interval to keep model_mode current, honor
@@ -241,6 +244,10 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	// run requested protection be disabled (baseline eval) — bypass the policy check with an allow,
 	// so the agent's raw behavior is measured. Deny/kill still enforce when protection is NOT disabled.
 	if g.simCtl != nil && g.simCtl.Active() {
+		if scope, ok := ctx.Value(invocationContextKey{}).(invocationScope); ok && (g.simCtl.ProtectionDisabled() || scope.runID != g.simCtl.RunID() || !scope.allowInjection) {
+			dec := Decision{Action: ActionDeny, Reason: "remote_simulation_not_authorized"}
+			return dec, &DenyError{Decision: dec}
+		}
 		g.recordSimEvent(req)
 		if g.simCtl.ProtectionDisabled() {
 			dec := Decision{Action: ActionAllow, Reason: "simulation_protection_disabled"}
@@ -339,6 +346,13 @@ func (g *Guard) DID() string {
 // Close flushes and releases resources: it stops the config poller (if Connect started one) and the
 // telemetry sink's owned goroutine. Safe to call once.
 func (g *Guard) Close() error {
+	g.invocationMu.Lock()
+	g.invocationClosed = true
+	invocations := append([]*InvocationConnection(nil), g.invocations...)
+	g.invocationMu.Unlock()
+	for _, c := range invocations {
+		_ = c.Close()
+	}
 	g.pollMu.Lock()
 	stop, done := g.pollStop, g.pollDone
 	g.pollStop = nil
