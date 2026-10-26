@@ -10,15 +10,21 @@ import (
 )
 
 func TestCloudTelemetryDefaultAndOptOut(t *testing.T) {
+	enabled, disabled := true, false
 	for _, tc := range []struct {
 		name       string
+		configured *bool
 		opts       []Option
 		deliveries int32
 	}{
-		{"default", nil, 1},
-		{"disabled", []Option{WithoutCloudTelemetry()}, 0},
-		{"reenabled", []Option{WithoutCloudTelemetry(), WithCloudTelemetry(time.Hour)}, 1},
-		{"custom", []Option{WithTelemetry(&captureTelemetry{})}, 0},
+		{"default", nil, nil, 1},
+		{"config disabled", &disabled, nil, 0},
+		{"config enabled", &enabled, nil, 1},
+		{"option enables", &disabled, []Option{WithCloudTelemetry(time.Hour)}, 1},
+		{"option disables", &enabled, []Option{WithoutCloudTelemetry()}, 0},
+		{"disabled", nil, []Option{WithoutCloudTelemetry()}, 0},
+		{"reenabled", nil, []Option{WithoutCloudTelemetry(), WithCloudTelemetry(time.Hour)}, 1},
+		{"custom", nil, []Option{WithTelemetry(&captureTelemetry{})}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var deliveries atomic.Int32
@@ -42,7 +48,7 @@ func TestCloudTelemetryDefaultAndOptOut(t *testing.T) {
 				w.Write([]byte(`{}`))
 			}))
 			defer srv.Close()
-			g, err := New(Config{APIURL: srv.URL}, tc.opts...)
+			g, err := New(Config{APIURL: srv.URL, CloudTelemetry: tc.configured}, tc.opts...)
 			if err != nil {
 				t.Fatal(err)
 			}

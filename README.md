@@ -97,6 +97,7 @@ returned `Config` before calling `New`.
 | `COMPFLY_API_URL` | gateway base URL; defaults to `https://prism.p.compfly.ai` |
 | `COMPFLY_AGENT_DID` | the agent's DID |
 | `COMPFLY_AGENT_PRIVATE_KEY_PATH` | Ed25519 signing key (or `COMPFLY_AGENT_PRIVATE_KEY` inline) |
+| `FLYEDGE_CLOUD_TELEMETRY` | `true` (default) or `false`; controls cloud event delivery |
 | `FLYEDGE_MODE` | `enforce` \| `warn` (default) \| `audit` \| `off` |
 | `FLYEDGE_FAIL_MODE` | `fail_open` (default) \| `fail_closed` — what happens when the gateway is unreachable |
 
@@ -114,7 +115,10 @@ outage. A kill-switch decision always blocks and cannot be failed open.
 
 Cloud telemetry is enabled by default: events are batched to `/v1/flyedge/telemetry`
 every five seconds and flushed on `Close()`. `Report()` remains available locally.
-Use `WithCloudTelemetry(interval)` to customize the cadence, or
+Set `Config.CloudTelemetry` to a `*bool` (`nil` means enabled), or set
+`FLYEDGE_CLOUD_TELEMETRY=false` when using `LoadEnv()`, to disable cloud delivery.
+Invalid environment values are rejected by `New` unless you replace the field.
+Explicit telemetry options override configuration. Use `WithCloudTelemetry(interval)` to customize the cadence, or
 `WithoutCloudTelemetry()` for local-only recording. A `WithTelemetry(sink)` custom
 sink takes precedence over cloud delivery.
 

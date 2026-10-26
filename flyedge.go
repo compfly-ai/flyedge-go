@@ -144,8 +144,11 @@ type Guard struct {
 // guard runs check-only/unsigned (useful for tests/offline). Returns an error on invalid config —
 // it never silently degrades. Importing this package has no side effects; nothing starts until New.
 func New(cfg Config, opts ...Option) (*Guard, error) {
+	if cfg.cloudTelemetryEnvError != nil && cfg.CloudTelemetry == nil {
+		return nil, cfg.cloudTelemetryEnvError
+	}
 	cfg = cfg.withDefaults()
-	g := &Guard{cfg: cfg, cloudTelemetry: true}
+	g := &Guard{cfg: cfg, cloudTelemetry: *cfg.CloudTelemetry}
 	g.hostname, _ = os.Hostname()
 	g.simEnabled = true // WithSimulation(false) opts out
 
