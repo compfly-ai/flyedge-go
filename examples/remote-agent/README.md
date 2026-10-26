@@ -141,5 +141,4 @@ With no state, the example retains its DEMO-42 behavior. Explicit state without 
 order fails. Logs show the resolved order ID rather than arbitrary state contents.
 
 Existing profile snapshots remain available in historical runs; new runs use
-scenario-owned state. The files in `profiles/` illustrate the retired profile API
-and should not be supplied to new evaluations.
+scenario-owned state.
