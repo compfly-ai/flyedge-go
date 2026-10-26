@@ -112,9 +112,11 @@ The default is `fail_open`: if the gateway is unreachable, the action proceeds a
 error is recorded. Set `fail_closed` when blocking is safer than continuing during an
 outage. A kill-switch decision always blocks and cannot be failed open.
 
-Protection events are summarized in memory by default. Use `WithCloudTelemetry` to send
-SDK telemetry to CompFly, or use `telemetry/otel` to export checks to your observability
-stack.
+Cloud telemetry is enabled by default: events are batched to `/v1/flyedge/telemetry`
+every five seconds and flushed on `Close()`. `Report()` remains available locally.
+Use `WithCloudTelemetry(interval)` to customize the cadence, or
+`WithoutCloudTelemetry()` for local-only recording. A `WithTelemetry(sink)` custom
+sink takes precedence over cloud delivery.
 
 ## Denials are values
 

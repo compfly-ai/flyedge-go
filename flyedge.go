@@ -104,7 +104,7 @@ type Guard struct {
 	signer           identity.Signer
 	enforcer         enforce.Enforcer
 	tel              telemetry.Telemetry
-	cloudTelemetry   bool          // WithCloudTelemetry: ship events to /v1/flyedge/telemetry
+	cloudTelemetry   bool          // Enabled by default: ship events to /v1/flyedge/telemetry
 	telInterval      time.Duration // flush interval for cloud telemetry
 
 	// Config heartbeat poller: an owned goroutine started by Connect and stopped by
@@ -145,7 +145,7 @@ type Guard struct {
 // it never silently degrades. Importing this package has no side effects; nothing starts until New.
 func New(cfg Config, opts ...Option) (*Guard, error) {
 	cfg = cfg.withDefaults()
-	g := &Guard{cfg: cfg}
+	g := &Guard{cfg: cfg, cloudTelemetry: true}
 	g.hostname, _ = os.Hostname()
 	g.simEnabled = true // WithSimulation(false) opts out
 
@@ -166,7 +166,7 @@ func New(cfg Config, opts ...Option) (*Guard, error) {
 	if g.enforcer == nil {
 		g.enforcer = enforce.NewHTTPEnforcer(cfg.APIURL, g.signer, cfg.Timeout)
 	}
-	// Telemetry: cloud batcher if requested (ship to /v1/flyedge/telemetry via the signed enforcer),
+	// Telemetry: cloud batcher by default (ship to /v1/flyedge/telemetry via the signed enforcer),
 	// an injected sink if one was set via WithTelemetry, else an in-memory recorder. Cloud wiring
 	// happens here (post-enforcer) so the sender can reuse the enforcer's signing.
 	if g.tel == nil && g.cloudTelemetry {
