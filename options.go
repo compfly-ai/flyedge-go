@@ -37,18 +37,30 @@ func WithEnforcer(e enforce.Enforcer) Option {
 }
 
 // WithTelemetry injects the telemetry sink (e.g. Noop, a cloud batcher, or an OTel bridge),
-// overriding the default in-memory Recorder.
+// overriding the default cloud batcher.
 func WithTelemetry(t telemetry.Telemetry) Option {
 	return func(g *Guard) error { g.tel = t; return nil }
 }
 
 // WithCloudTelemetry ships protection events to the gateway (/v1/flyedge/telemetry) via a batched,
 // owned-goroutine sink (flushed on Close), in addition to keeping Report() working locally.
-// interval is the flush cadence (0 → 5s). Requires the default signed HTTP enforcer.
+// Cloud telemetry is enabled by default. interval is the flush cadence (0 → 5s).
+// Requires an enforcer supporting signed POSTs; the default HTTP enforcer does.
 func WithCloudTelemetry(interval time.Duration) Option {
 	return func(g *Guard) error {
-		g.cloudTelemetry = true
-		g.telInterval = interval
+		enabled := true
+		g.cfg.CloudTelemetry = &enabled
+		g.cfg.TelemetryInterval = interval
+		return nil
+	}
+}
+
+// WithoutCloudTelemetry disables cloud event delivery and keeps an in-memory Recorder.
+// A custom sink supplied with WithTelemetry still takes precedence.
+func WithoutCloudTelemetry() Option {
+	return func(g *Guard) error {
+		enabled := false
+		g.cfg.CloudTelemetry = &enabled
 		return nil
 	}
 }

@@ -98,12 +98,13 @@ func AsKillSwitchError(err error) (*KillSwitchError, bool) {
 
 // Guard is the protection handle. Construct once with New, pass it explicitly, Close when done.
 type Guard struct {
-	cfg            Config
-	signer         identity.Signer
-	enforcer       enforce.Enforcer
-	tel            telemetry.Telemetry
-	cloudTelemetry bool          // WithCloudTelemetry: ship events to /v1/flyedge/telemetry
-	telInterval    time.Duration // flush interval for cloud telemetry
+	invocationMu     sync.Mutex
+	invocations      []*InvocationConnection
+	invocationClosed bool
+	cfg              Config
+	signer           identity.Signer
+	enforcer         enforce.Enforcer
+	tel              telemetry.Telemetry
 
 	// Config heartbeat poller: an owned goroutine started by Connect and stopped by
 	// Close. It GETs /v1/flyedge/config on an interval to keep model_mode current, honor
@@ -146,6 +147,9 @@ type Guard struct {
 // guard runs check-only/unsigned (useful for tests/offline). Returns an error on invalid config —
 // it never silently degrades. Importing this package has no side effects; nothing starts until New.
 func New(cfg Config, opts ...Option) (*Guard, error) {
+	if cfg.cloudTelemetryEnvError != nil && cfg.CloudTelemetry == nil {
+		return nil, cfg.cloudTelemetryEnvError
+	}
 	cfg = cfg.withDefaults()
 	g := &Guard{cfg: cfg}
 	g.hostname, _ = os.Hostname()
@@ -154,6 +158,7 @@ func New(cfg Config, opts ...Option) (*Guard, error) {
 	if err := applyOptions(g, opts); err != nil {
 		return nil, err
 	}
+	g.cfg = g.cfg.withDefaults()
 
 	// Build a signer from config unless one was injected via an option.
 	if g.signer == nil && hasKey(cfg) {
@@ -168,16 +173,16 @@ func New(cfg Config, opts ...Option) (*Guard, error) {
 	if g.enforcer == nil {
 		g.enforcer = enforce.NewHTTPEnforcer(cfg.APIURL, g.signer, cfg.Timeout)
 	}
-	// Telemetry: cloud batcher if requested (ship to /v1/flyedge/telemetry via the signed enforcer),
+	// Telemetry: cloud batcher by default (ship to /v1/flyedge/telemetry via the signed enforcer),
 	// an injected sink if one was set via WithTelemetry, else an in-memory recorder. Cloud wiring
 	// happens here (post-enforcer) so the sender can reuse the enforcer's signing.
-	if g.tel == nil && g.cloudTelemetry {
+	if g.tel == nil && *g.cfg.CloudTelemetry {
 		if sp, ok := g.enforcer.(signedPoster); ok {
 			sender := func(ctx context.Context, body []byte) error {
 				_, err := sp.PostSigned(ctx, "/v1/flyedge/telemetry", body)
 				return err
 			}
-			g.tel = telemetry.NewBatched(sender, "guard-"+randID(), g.telInterval)
+			g.tel = telemetry.NewBatched(sender, "guard-"+randID(), g.cfg.TelemetryInterval)
 		}
 	}
 	if g.tel == nil {
@@ -264,6 +269,10 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	// run requested protection be disabled (baseline eval) — bypass the policy check with an allow,
 	// so the agent's raw behavior is measured. Deny/kill still enforce when protection is NOT disabled.
 	if g.simCtl != nil && g.simCtl.Active() {
+		if scope, ok := ctx.Value(invocationContextKey{}).(invocationScope); ok && (g.simCtl.ProtectionDisabled() || scope.runID != g.simCtl.RunID() || !scope.allowInjection) {
+			dec := Decision{Action: ActionDeny, Reason: "remote_simulation_not_authorized"}
+			return dec, &DenyError{Decision: dec}
+		}
 		g.recordSimEvent(req)
 		if g.simCtl.ProtectionDisabled() {
 			dec := Decision{Action: ActionAllow, Reason: "simulation_protection_disabled"}
@@ -387,6 +396,13 @@ func (g *Guard) DID() string {
 // Close flushes and releases resources: it stops the config poller (if Connect started one) and the
 // telemetry sink's owned goroutine. Safe to call once.
 func (g *Guard) Close() error {
+	g.invocationMu.Lock()
+	g.invocationClosed = true
+	invocations := append([]*InvocationConnection(nil), g.invocations...)
+	g.invocationMu.Unlock()
+	for _, c := range invocations {
+		_ = c.Close()
+	}
 	g.pollMu.Lock()
 	stop, done := g.pollStop, g.pollDone
 	g.pollStop = nil

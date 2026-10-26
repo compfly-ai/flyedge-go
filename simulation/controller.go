@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 )
@@ -308,6 +309,7 @@ func (c *Controller) Record(ev RuntimeEvent, bi BehaviorInput) {
 		c.mu.Unlock()
 		return
 	}
+	correlateEvent(&ev)
 	ev.RunID = c.runID
 	tr := c.tr
 	monitor := c.monitor
@@ -444,4 +446,17 @@ func randHex() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// Preserve the complete session for observability/focused-run routing, while the
+// evaluation collector indexes component evidence by the prompt portion only.
+func correlateEvent(ev *RuntimeEvent) {
+	if ev.SessionID == "" {
+		ev.SessionID = ev.PromptID
+	}
+	if rest, ok := strings.CutPrefix(ev.SessionID, "eval:"); ok {
+		if _, prompt, found := strings.Cut(rest, ":"); found && prompt != "" {
+			ev.PromptID = prompt
+		}
+	}
 }

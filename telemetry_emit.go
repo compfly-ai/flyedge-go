@@ -15,7 +15,7 @@ import (
 // which passively observes real model calls — hands the facts it already has to these
 // helpers, which emit the event types prism recognizes (llm_io/tool_io/session_*).
 // They route through the Guard's configured telemetry sink, so they only reach the
-// platform when a cloud sink (WithCloudTelemetry) is installed; otherwise they're a
+// platform through the default cloud sink unless it is disabled or replaced; otherwise they're a
 // no-op beyond the local recorder.
 
 // RecordLLMCall emits an llm_io event — a model call's model/provider/token/latency

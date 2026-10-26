@@ -4,7 +4,10 @@
 package flyedge
 
 import (
+	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -35,6 +38,12 @@ const DefaultAPIURL = "https://prism.p.compfly.ai"
 // warn-mode, fail-open, check-only guard against the default API URL. Populate via LoadEnv or set
 // fields directly — there are no scattered env reads elsewhere in the package.
 type Config struct {
+	// CloudTelemetry controls cloud event delivery (FLYEDGE_CLOUD_TELEMETRY).
+	// Nil defaults to true; false keeps telemetry local. Explicit Options override it.
+	CloudTelemetry *bool
+	// TelemetryInterval is the cloud flush cadence. Values below one second use five seconds.
+	TelemetryInterval      time.Duration
+	cloudTelemetryEnvError error
 	// APIURL is the prism gateway base (COMPFLY_API_URL). Empty → DefaultAPIURL.
 	APIURL string
 	// DID is the agent's decentralized identifier (COMPFLY_AGENT_DID), e.g.
@@ -69,6 +78,14 @@ func LoadEnv() Config {
 		FailMode:        FailMode(os.Getenv("FLYEDGE_FAIL_MODE")),
 		SimTelemetryURL: os.Getenv("COMPFLY_SIM_TELEMETRY_URL"),
 	}
+	if raw := strings.TrimSpace(os.Getenv("FLYEDGE_CLOUD_TELEMETRY")); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			cfg.cloudTelemetryEnvError = fmt.Errorf("flyedge: FLYEDGE_CLOUD_TELEMETRY must be a boolean")
+		} else {
+			cfg.CloudTelemetry = &enabled
+		}
+	}
 	if inline := os.Getenv("COMPFLY_AGENT_PRIVATE_KEY"); inline != "" {
 		cfg.KeyPEM = []byte(inline)
 	}
@@ -77,6 +94,14 @@ func LoadEnv() Config {
 
 // withDefaults returns a copy with empty fields filled by package defaults.
 func (c Config) withDefaults() Config {
+	enabled := true
+	if c.CloudTelemetry != nil {
+		enabled = *c.CloudTelemetry
+	}
+	c.CloudTelemetry = &enabled
+	if c.TelemetryInterval < time.Second {
+		c.TelemetryInterval = 5 * time.Second
+	}
 	if c.APIURL == "" {
 		c.APIURL = DefaultAPIURL
 	}

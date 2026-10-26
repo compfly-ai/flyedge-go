@@ -70,6 +70,7 @@ type RuntimeEvent struct {
 	EventID       string  `json:"event_id"`
 	RunID         string  `json:"run_id"`
 	PromptID      string  `json:"prompt_id"`
+	SessionID     string  `json:"session_id,omitempty"`
 	Timestamp     float64 `json:"timestamp"` // unix epoch seconds (float), matching Python time.time()
 	ComponentType string  `json:"component_type"`
 	ComponentName string  `json:"component_name"`
@@ -95,12 +96,12 @@ type RuntimeEvent struct {
 	Flags []string `json:"flags,omitempty"`
 
 	// Injection tracking (set by the attack injector)
-	InjectionID            string `json:"injection_id,omitempty"`
-	InjectionStrategy      string `json:"injection_strategy,omitempty"`
-	InjectionTarget        string `json:"injection_target,omitempty"`
-	InjectionSophistication int   `json:"injection_sophistication,omitempty"`
-	InjectionChain         string `json:"injection_chain,omitempty"`
-	InjectionTier          int    `json:"injection_tier,omitempty"`
+	InjectionID             string `json:"injection_id,omitempty"`
+	InjectionStrategy       string `json:"injection_strategy,omitempty"`
+	InjectionTarget         string `json:"injection_target,omitempty"`
+	InjectionSophistication int    `json:"injection_sophistication,omitempty"`
+	InjectionChain          string `json:"injection_chain,omitempty"`
+	InjectionTier           int    `json:"injection_tier,omitempty"`
 
 	// Agent profiling (set by the attack injector in observe mode)
 	AgentProfile map[string]any `json:"agent_profile,omitempty"`
