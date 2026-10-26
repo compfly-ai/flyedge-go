@@ -79,7 +79,7 @@ func (t *guardRoundTripper) roundTripResponses(req *http.Request) (*http.Respons
 		return nil, err
 	}
 	resp, err := t.base.RoundTrip(req)
-	if err != nil || resp == nil || !t.checkResponse || resp.StatusCode >= 400 {
+	if err != nil || resp == nil || !t.checkResponse || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, err
 	}
 	if resp.Body == nil {

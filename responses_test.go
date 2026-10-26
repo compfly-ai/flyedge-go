@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -90,6 +91,64 @@ func responsesGuard(t *testing.T, cfg Config, e *responsesEnforcer) *Guard {
 	t.Cleanup(func() { _ = g.Close() })
 	return g
 }
+
+func TestResponsesRedirectsRemainGoverned(t *testing.T) {
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		for _, deny := range []Stage{"", StagePostLLM} {
+			t.Run(http.StatusText(status)+"/"+string(deny), func(t *testing.T) {
+				e := &responsesEnforcer{deny: deny}
+				g := responsesGuard(t, Config{FailMode: FailClosed}, e)
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					body, err := io.ReadAll(r.Body)
+					if err != nil || string(body) != responsesRequest || r.Method != http.MethodPost {
+						t.Error("redirect did not preserve request method and body")
+					}
+					if r.URL.Path == "/v1/responses" {
+						w.Header().Set("Location", "/gateway/responses")
+						w.WriteHeader(status)
+						if status == http.StatusPermanentRedirect {
+							_, _ = io.WriteString(w, "<html>redirect</html>")
+						}
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, responsesReply)
+				}))
+				defer server.Close()
+				req := responseReq(t, responsesRequest)
+				destination, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", nil)
+				req.URL = destination.URL
+				client := &http.Client{Transport: g.WrapRoundTripper(server.Client().Transport)}
+				resp, err := client.Do(req)
+				if deny == StagePostLLM {
+					if err == nil || resp != nil {
+						t.Fatal("redirected output bypassed post-model denial")
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer resp.Body.Close()
+					body, err := io.ReadAll(resp.Body)
+					if err != nil || resp.StatusCode != http.StatusOK || string(body) != responsesReply {
+						t.Fatal("redirected response changed")
+					}
+				}
+				if calls != 2 || len(e.requests) != 3 {
+					t.Fatalf("calls=%d checks=%d", calls, len(e.requests))
+				}
+				for i, stage := range []Stage{StagePreLLM, StagePreLLM, StagePostLLM} {
+					if e.requests[i].Stage != stage || e.requests[i].SessionID != "responses-session" {
+						t.Fatal("redirect lost governance or session")
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestResponsesDenyAllowAndContext(t *testing.T) {
 	for _, deny := range []Stage{StagePreLLM, StagePostLLM, ""} {
 		t.Run(string(deny), func(t *testing.T) {
