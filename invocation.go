@@ -43,6 +43,7 @@ type InvocationMessage struct {
 	Content string `json:"content"`
 }
 type InvocationRequest struct {
+	ContractVersion string `json:"contract_version,omitempty"`
 	// State contains client-owned UI/session context, never authorization claims.
 	// Nil means absent; a non-nil empty map means an explicitly empty profile.
 	State     map[string]json.RawMessage `json:"state,omitempty"`
@@ -57,6 +58,8 @@ type InvocationRequest struct {
 // InvocationOptions grants only the listed purposes for this serving session.
 // The handler runs with the application's real credentials. This is not a sandbox.
 type InvocationOptions struct {
+	// Contract is published by the platform before this connection can serve.
+	Contract *InvocationContract `json:"contract,omitempty"`
 	// AllowClientState explicitly permits client-state payloads for this handler.
 	AllowClientState bool                `json:"allow_client_state"`
 	Name             string              `json:"name"`
@@ -75,6 +78,14 @@ type InvocationOptions struct {
 }
 
 func (o InvocationOptions) validate() (InvocationOptions, error) {
+	var err error
+	o.Contract, err = snapshotInvocationContract(o.Contract)
+	if err != nil {
+		return o, err
+	}
+	if o.Contract != nil && len(o.Contract.State.Fields) > 0 && !o.AllowClientState {
+		return o, errors.New("flyedge: a state contract requires AllowClientState")
+	}
 	if o.LeaseDuration == 0 {
 		o.LeaseDuration = time.Hour
 	}
@@ -116,14 +127,15 @@ type invocationFrame struct {
 	Error     string             `json:"error,omitempty"`
 }
 type InvocationConnection struct {
-	ID        string
-	expiresAt time.Time
-	leaseMu   sync.RWMutex
-	ws        *websocket.Conn
-	ctx       context.Context
-	cancel    context.CancelFunc
-	done      chan struct{}
-	err       error // published before done closes
+	ContractVersion string
+	ID              string
+	expiresAt       time.Time
+	leaseMu         sync.RWMutex
+	ws              *websocket.Conn
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
+	err             error // published before done closes
 }
 
 // ExpiresAt returns the latest acknowledged lease expiry. Automatic renewal advances it.
@@ -195,15 +207,19 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 		return nil, err
 	}
 	var lease struct {
-		ID        string    `json:"id"`
-		Token     string    `json:"token"`
-		ExpiresAt time.Time `json:"expires_at"`
+		ContractVersion string    `json:"contract_version"`
+		ID              string    `json:"id"`
+		Token           string    `json:"token"`
+		ExpiresAt       time.Time `json:"expires_at"`
 	}
 	if err = json.Unmarshal(raw, &lease); err != nil {
 		return nil, err
 	}
 	if len(lease.ID) != 32 || strings.IndexFunc(lease.ID, func(r rune) bool { return !strings.ContainsRune("0123456789abcdef", r) }) >= 0 || lease.Token == "" || !lease.ExpiresAt.After(time.Now()) || lease.ExpiresAt.After(time.Now().Add(opts.LeaseDuration+5*time.Second)) {
 		return nil, errors.New("flyedge: invalid invocation lease")
+	}
+	if opts.Contract != nil && (len(lease.ContractVersion) != 71 || !strings.HasPrefix(lease.ContractVersion, "sha256:")) {
+		return nil, errors.New("flyedge: broker did not acknowledge the invocation contract")
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/v1/flyedge/invocations/" + lease.ID + "/socket"
 	if base.Scheme == "https" {
@@ -229,7 +245,7 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 		_ = ws.CloseNow()
 		return nil, errors.New("flyedge: invocation connection did not become ready")
 	}
-	c := &InvocationConnection{ID: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel, done: make(chan struct{})}
+	c := &InvocationConnection{ContractVersion: lease.ContractVersion, ID: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel, done: make(chan struct{})}
 	g.invocationMu.Lock()
 	if g.invocationClosed {
 		g.invocationMu.Unlock()
@@ -393,6 +409,8 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				}
 				if !permitted {
 					reason = "purpose not authorized"
+				} else if c.ContractVersion != "" && r.ContractVersion != c.ContractVersion {
+					reason = "invocation contract version mismatch"
 				} else if r.State != nil && !o.AllowClientState {
 					reason = "client state not authorized"
 				} else if _, duplicate := seen[r.ID]; duplicate {

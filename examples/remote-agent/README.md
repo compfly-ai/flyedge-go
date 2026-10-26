@@ -117,15 +117,20 @@ as `map[string]json.RawMessage`; decode those values into your own types. A nil
 map means no profile; an empty, non-nil map means an explicitly empty profile.
 State is UI/session context, not an authenticated principal or a permission grant.
 
-Use the existing agent conversation contract to declare these state fields:
+The example declares `current_page` and `selected_order_id` as strings and
+`form` as JSON in `InvocationOptions.Contract`. The platform publishes that
+contract when the connection registers; no manual contract configuration is
+needed. In **Starting state → Manage**, expand **SDK-declared state contract**
+to inspect its fields and version. Schema edits belong in the SDK definition;
+profile values remain editable in the platform.
 
-```json
-{"fields":{"current_page":{"type":"string"},"selected_order_id":{"type":"json"},"form":{"type":"json"}}}
-```
+Registration fails if publication is unavailable or the broker cannot acknowledge
+the contract. Reconnect after changing the schema. Runs pin both their connection
+and contract version; incompatible saved profiles need correction before use.
 
-That object is the `state` portion of the conversation contract. Save profiles
-using the existing profile API, then select `stateProfileId` when starting a run
-or a playground conversation. Example profile creation bodies are in `profiles/`.
+Save profiles using the existing profile API, then select `stateProfileId` when
+starting a run or playground conversation. Example profile creation bodies are
+in `profiles/`.
 The SDK handler accepts a selected order ID or `form.order_id`. DEMO-42 returns
 `shipped`; DEMO-43 returns `processing`. An explicitly supplied profile with no
 order fails instead of falling back to DEMO-42. Without a profile, the original
