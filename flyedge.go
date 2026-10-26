@@ -109,21 +109,23 @@ type Guard struct {
 	// Config heartbeat poller: an owned goroutine started by Connect and stopped by
 	// Close. It GETs /v1/flyedge/config on an interval to keep model_mode current, honor
 	// manifest-refresh requests, and surface the simulation block. pollMu guards all fields below.
-	pollMu         sync.RWMutex
-	hostname       string
-	manifestInfo   ManifestInfo
-	manifestHash   string
-	modelMode      ModelMode
-	nontextAllowed bool
-	nontextAlways  bool // WithAttachments: set once at construction
-	nontextDID     string
-	nontextExpires time.Time
-	sim            *SimulationConfig
-	lastSimHash    string
-	pollInterval   time.Duration // WithHeartbeat override; else set from ConnectResponse
-	pollStarted    bool
-	pollStop       chan struct{}
-	pollDone       chan struct{}
+	pollMu             sync.RWMutex
+	hostname           string
+	manifestInfo       ManifestInfo
+	manifestHash       string
+	modelMode          ModelMode
+	nontextAllowed     bool
+	nontextAlways      bool // WithAttachments: set once at construction
+	nontextDID         string
+	nontextExpires     time.Time
+	nontextRevision    uint64
+	nontextAckRevision uint64
+	sim                *SimulationConfig
+	lastSimHash        string
+	pollInterval       time.Duration // WithHeartbeat override; else set from ConnectResponse
+	pollStarted        bool
+	pollStop           chan struct{}
+	pollDone           chan struct{}
 
 	onModeChange      func(old, cur ModelMode)
 	onManifestRefresh func()
