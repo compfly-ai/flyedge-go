@@ -66,3 +66,26 @@ func TestContractRegistrationRejectsLegacyBrokerWithoutAcknowledgement(t *testin
 		t.Fatalf("expected unsupported broker error, got %v", err)
 	}
 }
+
+func TestPlaygroundDefaultsAreTypedAndSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		kind  StateFieldType
+		raw   string
+		valid bool
+	}{
+		{StateString, `"DEMO-42"`, true}, {StateString, `""`, true}, {StateBoolean, `false`, true}, {StateNumber, `0`, true}, {StateJSON, `{"tracking":false}`, true}, {StateJSON, `null`, true},
+		{StateString, `null`, false}, {StateNumber, `"12"`, false}, {StateBoolean, `0`, false}, {StateJSON, `{`, false},
+	} {
+		field := StateField{Type: tc.kind, PlaygroundDefault: json.RawMessage(tc.raw)}
+		copy, err := snapshotInvocationContract(&InvocationContract{State: StateContract{Fields: map[string]StateField{"value": field}}})
+		if (err == nil) != tc.valid {
+			t.Fatalf("%s %s: %v", tc.kind, tc.raw, err)
+		}
+		if err == nil {
+			field.PlaygroundDefault[0] = 'X'
+			if string(copy.State.Fields["value"].PlaygroundDefault) != tc.raw {
+				t.Fatal("default aliases caller memory")
+			}
+		}
+	}
+}

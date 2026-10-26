@@ -25,6 +25,8 @@ const (
 
 type StateField struct {
 	Type StateFieldType `json:"type"`
+	// PlaygroundDefault prefills the Playground editor only. It never fills runtime or scenario state.
+	PlaygroundDefault json.RawMessage `json:"playground_default,omitempty"`
 }
 
 var stateFieldName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -39,6 +41,24 @@ func snapshotInvocationContract(c *InvocationContract) (*InvocationContract, err
 	for name, field := range c.State.Fields {
 		if len(name) > 128 || !stateFieldName.MatchString(name) {
 			return nil, fmt.Errorf("flyedge: invalid state field name")
+		}
+		if len(field.PlaygroundDefault) > 0 {
+			var value any
+			if err := json.Unmarshal(field.PlaygroundDefault, &value); err != nil {
+				return nil, fmt.Errorf("flyedge: invalid PlaygroundDefault JSON for %s", name)
+			}
+			valid := field.Type == StateJSON
+			switch field.Type {
+			case StateString:
+				_, valid = value.(string)
+			case StateNumber:
+				_, valid = value.(float64)
+			case StateBoolean:
+				_, valid = value.(bool)
+			}
+			if !valid {
+				return nil, fmt.Errorf("flyedge: PlaygroundDefault for %s must be %s", name, field.Type)
+			}
 		}
 		switch field.Type {
 		case StateString, StateNumber, StateBoolean, StateJSON:

@@ -57,9 +57,9 @@ func run() error {
 		LeaseDuration: *leaseDuration,
 		AutoRenew:     autoRenew,
 		Contract: &flyedge.InvocationContract{State: flyedge.StateContract{Fields: map[string]flyedge.StateField{
-			"current_page":      {Type: flyedge.StateString},
-			"selected_order_id": {Type: flyedge.StateString},
-			"form":              {Type: flyedge.StateJSON},
+			"current_page":      {Type: flyedge.StateString, PlaygroundDefault: json.RawMessage(`"order-details"`)},
+			"selected_order_id": {Type: flyedge.StateString, PlaygroundDefault: json.RawMessage(`"DEMO-42"`)},
+			"form":              {Type: flyedge.StateJSON, PlaygroundDefault: json.RawMessage(`{}`)},
 		}}},
 		AllowSimulationInjection: true,
 		// Local Tilt uses HTTP. The SDK limits this exception to literal loopback addresses.

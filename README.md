@@ -262,3 +262,21 @@ active invocation at a time, with a maximum aggregate text output of 1 MiB.
 See [the runnable support agent](examples/remote-agent/README.md) and
 [its scenario-owned state dataset](examples/remote-agent/datasets/client-state.json)
 for an example with tool calls, policy checks, colored logs, and simulation telemetry.
+
+### Optional Playground defaults
+
+`StateField.PlaygroundDefault` is optional JSON editor metadata:
+
+```go
+"selected_order_id": {
+    Type: flyedge.StateString,
+    PlaygroundDefault: json.RawMessage(`"DEMO-42"`),
+},
+```
+
+The SDK and Platform validate the default against the declared type. Playground
+prefills it when the user enables **Supply starting state**, and preserves edits
+when toggling state off and back on. No default is sent while state is disabled.
+Scenarios and runtime requests never have missing fields filled automatically;
+they continue to carry exactly their supplied state. Omit the default when it is
+not useful. Boolean false, numeric zero, empty strings, and JSON null are retained.
