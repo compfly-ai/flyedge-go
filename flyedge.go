@@ -329,7 +329,7 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 		retErr = &KillSwitchError{Kills: result.Kills}
 	case cerr != nil:
 		ev.Err = cerr.Error()
-		if g.cfg.FailMode == FailClosed && !mediaRequest {
+		if g.cfg.FailMode == FailClosed {
 			result = Decision{Action: ActionDeny, Reason: "enforcement_unavailable", Message: cerr.Error()}
 			retErr = &DenyError{Decision: result}
 		} else {

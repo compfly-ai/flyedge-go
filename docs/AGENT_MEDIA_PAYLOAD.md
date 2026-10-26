@@ -20,8 +20,9 @@ the SDK never fetches a URL or reads an arbitrary local path to obtain bytes.
 Normalization bounds recursion, visited nodes and transport size (16 MiB encoded
 budget). Attachment bytes contribute to the content hash. The allow path requires
 `nontext_status=decoded` or the explicit receiver oversize-skip acknowledgment.
-Missing acknowledgment and technical media errors retry text-only once, then fail open
-if unavailable; explicit control denials and kill switches still enforce. A proxy-mode media request first
+Missing acknowledgment and technical media errors retry text-only once. If that retry
+is unavailable, the configured FailMode applies: FailClosed blocks and FailOpen allows.
+Explicit control denials and kill switches still enforce. A proxy-mode media request first
 uses the same SDK check, then follows its original route. No provider settings
 are changed.
 

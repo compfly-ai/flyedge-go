@@ -199,9 +199,11 @@ func isMediaMIME(v any) bool {
 // walkers read, so its images and PDFs are found and kept out of policy text like any other input.
 func jsonValue(v any) any {
 	switch v.(type) {
-	case nil, string, bool, float64, json.Number, map[string]any, []any:
+	case nil, string, bool, float64, json.Number:
 		return v
 	}
+	// Even generic maps and slices may contain typed values at any depth.
+	// Normalize the complete JSON tree and retain exact numbers for policy text.
 	b, err := json.Marshal(v)
 	if err != nil {
 		return v

@@ -2,6 +2,7 @@ package flyedge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -141,12 +142,65 @@ func TestMediaAvailabilityAndExplicitDeny(t *testing.T) {
 			g := mediaGuard(t, rec, mode)
 			allowMedia(g)
 			dec, err := g.Check(context.Background(), CheckRequest{Content: Content{Full: "caption", Attachments: []Attachment{{ID: "a", MediaType: "image/png", DataBase64: "c3ludGhldGlj"}}}})
-			wantDeny := reason == "deny"
+			wantDeny := reason == "deny" || (reason == "transport" && mode == FailClosed)
 			if (err != nil) != wantDeny || (dec.Action == ActionDeny) != wantDeny {
 				t.Fatalf("%s/%s unexpected verdict: %+v %v", mode, reason, dec, err)
 			}
 			if reason == "decoded" && dec.NontextStatus != "decoded" {
 				t.Fatal("decoder acknowledgment missing")
+			}
+		}
+	}
+}
+
+type mediaRetryChecker struct {
+	mediaChecker
+	firstErr error
+}
+
+func (m *mediaRetryChecker) Check(ctx context.Context, r CheckRequest) (Decision, error) {
+	if len(m.requests) == 0 {
+		m.requests = append(m.requests, r)
+		return Decision{Action: ActionAllow}, m.firstErr
+	}
+	return m.mediaChecker.Check(ctx, r)
+}
+
+func TestMediaTextRetryHonorsFailMode(t *testing.T) {
+	for _, mode := range []FailMode{FailOpen, FailClosed} {
+		for _, firstErr := range []error{nil, errors.New("media unavailable")} {
+			for _, outcome := range []string{"allow", "deny", "unavailable"} {
+				rec := &mediaRetryChecker{firstErr: firstErr, mediaChecker: mediaChecker{decision: Decision{Action: ActionAllow}}}
+				if outcome == "deny" {
+					rec.decision = Decision{Action: ActionDeny, Reason: "text-policy"}
+				} else if outcome == "unavailable" {
+					rec.err = errors.New("text unavailable")
+				}
+				g, err := New(Config{FailMode: mode}, WithSigner(mediaSigner{}), WithEnforcer(rec), WithAttachments())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { g.Close() })
+				base := &mediaProvider{}
+				req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", strings.NewReader(mediaBody))
+				resp, err := g.WrapRoundTripper(base).RoundTrip(req)
+				wantDeny := outcome == "deny" || (outcome == "unavailable" && mode == FailClosed)
+				var denied *DenyError
+				if errors.As(err, &denied) != wantDeny || (base.calls == 0) != wantDeny {
+					t.Fatalf("mode=%s firstErr=%v outcome=%s: calls=%d err=%v", mode, firstErr, outcome, base.calls, err)
+				}
+				if !wantDeny && err != nil {
+					t.Fatal(err)
+				}
+				if resp != nil {
+					resp.Body.Close()
+				}
+				if len(rec.requests) != 2 || len(rec.requests[0].Content.Attachments) != 1 || len(rec.requests[1].Content.Attachments) != 0 {
+					t.Fatalf("expected one media check followed by one text check: %+v", rec.requests)
+				}
+				if rec.requests[0].Content.Full != rec.requests[1].Content.Full || rec.requests[0].RequestID == rec.requests[1].RequestID {
+					t.Fatal("text retry must preserve text with a fresh request ID")
+				}
 			}
 		}
 	}
@@ -269,24 +323,39 @@ func TestTypedToolInputMediaInspected(t *testing.T) {
 		Count  int64   `json:"count"`
 	}
 	in := args{Query: "summarize", Blocks: []block{{Type: "image", Source: source{"base64", "image/png", "c3ludGhldGlj"}}}, Count: 9007199254740993}
-	for _, allowed := range []bool{false, true} {
-		rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
-		g := mediaGuard(t, rec, FailOpen)
-		if allowed {
-			allowMedia(g)
-		}
-		if _, err := g.CheckToolCall(context.Background(), "s", "files", in); err != nil {
+	for _, input := range []any{
+		in,
+		map[string]any{"query": in.Query, "blocks": in.Blocks, "count": in.Count},
+		[]any{in.Query, in.Blocks, in.Count},
+		map[string]any{"nested": []any{map[string][]args{"arguments": {in}}}},
+	} {
+		original, err := json.Marshal(input)
+		if err != nil {
 			t.Fatal(err)
 		}
-		r := rec.requests[0]
-		if strings.Contains(r.Content.Full, "c3ludGhldGlj") || strings.Contains(r.Operation.ToolArgsJSON, "c3ludGhldGlj") {
-			t.Fatalf("allowed=%v: typed input bytes entered policy text", allowed)
-		}
-		if !strings.Contains(r.Content.Full, "summarize") || !strings.Contains(r.Content.Full, "9007199254740993") {
-			t.Fatalf("allowed=%v: typed input text changed: %s", allowed, r.Content.Full)
-		}
-		if len(r.Content.Attachments) != map[bool]int{false: 0, true: 1}[allowed] {
-			t.Fatalf("allowed=%v: attachments=%d", allowed, len(r.Content.Attachments))
+		for _, allowed := range []bool{false, true} {
+			rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
+			g := mediaGuard(t, rec, FailOpen)
+			if allowed {
+				allowMedia(g)
+			}
+			if _, err := g.CheckToolCall(context.Background(), "s", "files", input); err != nil {
+				t.Fatal(err)
+			}
+			r := rec.requests[0]
+			if strings.Contains(r.Content.Full, "c3ludGhldGlj") || strings.Contains(r.Operation.ToolArgsJSON, "c3ludGhldGlj") {
+				t.Fatalf("allowed=%v: typed input bytes entered policy text", allowed)
+			}
+			if !strings.Contains(r.Content.Full, "summarize") || !strings.Contains(r.Content.Full, "9007199254740993") {
+				t.Fatalf("allowed=%v: typed input text changed: %s", allowed, r.Content.Full)
+			}
+			if len(r.Content.Attachments) != map[bool]int{false: 0, true: 1}[allowed] {
+				t.Fatalf("allowed=%v: attachments=%d", allowed, len(r.Content.Attachments))
+			}
+			after, err := json.Marshal(input)
+			if err != nil || string(after) != string(original) {
+				t.Fatal("original tool input mutated")
+			}
 		}
 	}
 }
