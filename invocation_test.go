@@ -9,6 +9,7 @@ import (
 	"errors"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/compfly-ai/flyedge-go/simulation"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -139,5 +140,20 @@ func TestGuardCloseStopsInvocationConnection(t *testing.T) {
 	}
 	if c.Wait() == nil {
 		t.Fatal("closed connection has no terminal status")
+	}
+}
+
+func TestRemoteInvocationCannotBypassProtectionDuringBaseline(t *testing.T) {
+	g, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	g.simCtl = simulation.New("test")
+	g.simCtl.OnConfigChange(&simulation.Config{Active: true, RunID: "run", TelemetryURL: "ws://127.0.0.1:1", TelemetryJWT: "test", ProtectionDisabled: true})
+	ctx := context.WithValue(context.Background(), invocationContextKey{}, invocationScope{runID: "run", allowInjection: true})
+	dec, err := g.Check(ctx, CheckRequest{Stage: StagePreLLM, Content: Content{Full: "hello"}})
+	if err == nil || dec.Reason != "remote_simulation_not_authorized" {
+		t.Fatalf("baseline escaped remote scope: %+v %v", dec, err)
 	}
 }
