@@ -18,6 +18,17 @@ Full input and output content is logged, including simulation-injected content;
 use test data. Terminal control characters are escaped. Restart the example to
 load code changes.
 
+## Telemetry
+
+The incoming message is governed with `pre_llm` / `user.prompt`, which makes its
+captured content visible in the conversation trace. Tool checks/results and the
+`post_llm` response carry the same invocation session ID.
+
+This fixture does not call an LLM, so model-call and token-usage telemetry are
+absent by design. When replacing it with a real provider call, report the actual
+request, response, model, usage, and latency with `RecordLLMCallDetail`; policy
+checks alone do not record model usage.
+
 ## Lease renewal
 
 Calling `ServeInvocations` is the explicit opt-in. The default lease duration is

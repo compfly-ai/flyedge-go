@@ -102,10 +102,11 @@ func handler(g *flyedge.Guard, baseLogger *slog.Logger) flyedge.InvocationHandle
 				prompt = m.Content
 			}
 		}
-		// The deterministic model records the actual input; it never interprets injected
-		// text as executable code. Use a real model for model-resilience measurements.
+		// Mark the incoming user message explicitly so the conversation trace can
+		// display it. This fixture makes no model call and reports no token usage.
+		// It never interprets injected text as executable code.
 		stage = "pre_llm"
-		if _, err := g.Check(ctx, flyedge.CheckRequest{SessionID: r.SessionID, Stage: flyedge.StagePreLLM, ComponentType: "LLM", ComponentName: "deterministic-support", Content: flyedge.Content{Full: prompt}, Operation: flyedge.Operation{Type: "chat.completions", ModelID: "deterministic-support"}}); err != nil {
+		if _, err := g.Check(ctx, flyedge.CheckRequest{SessionID: r.SessionID, Stage: flyedge.StagePreLLM, ComponentType: "LLM", ComponentName: "deterministic-support", Content: flyedge.Content{Full: prompt}, Operation: flyedge.Operation{Type: "user.prompt", ModelID: "deterministic-support"}}); err != nil {
 			var denied *flyedge.DenyError
 			if errors.As(err, &denied) {
 				logger.Warn("policy.denied", "stage", stage, "error", err)
