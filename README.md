@@ -118,7 +118,9 @@ every five seconds and flushed on `Close()`. `Report()` remains available locall
 Set `Config.CloudTelemetry` to a `*bool` (`nil` means enabled), or set
 `FLYEDGE_CLOUD_TELEMETRY=false` when using `LoadEnv()`, to disable cloud delivery.
 Invalid environment values are rejected by `New` unless you replace the field.
-Explicit telemetry options override configuration. Use `WithCloudTelemetry(interval)` to customize the cadence, or
+Set `Config.TelemetryInterval` to customize the cadence; values below one second
+use the five-second default. Explicit telemetry options override configuration.
+Use `WithCloudTelemetry(interval)` to enable delivery and set the cadence, or
 `WithoutCloudTelemetry()` for local-only recording. A `WithTelemetry(sink)` custom
 sink takes precedence over cloud delivery.
 

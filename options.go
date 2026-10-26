@@ -48,8 +48,9 @@ func WithTelemetry(t telemetry.Telemetry) Option {
 // Requires an enforcer supporting signed POSTs; the default HTTP enforcer does.
 func WithCloudTelemetry(interval time.Duration) Option {
 	return func(g *Guard) error {
-		g.cloudTelemetry = true
-		g.telInterval = interval
+		enabled := true
+		g.cfg.CloudTelemetry = &enabled
+		g.cfg.TelemetryInterval = interval
 		return nil
 	}
 }
@@ -57,7 +58,11 @@ func WithCloudTelemetry(interval time.Duration) Option {
 // WithoutCloudTelemetry disables cloud event delivery and keeps an in-memory Recorder.
 // A custom sink supplied with WithTelemetry still takes precedence.
 func WithoutCloudTelemetry() Option {
-	return func(g *Guard) error { g.cloudTelemetry = false; return nil }
+	return func(g *Guard) error {
+		enabled := false
+		g.cfg.CloudTelemetry = &enabled
+		return nil
+	}
 }
 
 // WithMode overrides Config.Mode.

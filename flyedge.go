@@ -104,8 +104,6 @@ type Guard struct {
 	signer           identity.Signer
 	enforcer         enforce.Enforcer
 	tel              telemetry.Telemetry
-	cloudTelemetry   bool          // Enabled by default: ship events to /v1/flyedge/telemetry
-	telInterval      time.Duration // flush interval for cloud telemetry
 
 	// Config heartbeat poller: an owned goroutine started by Connect and stopped by
 	// Close. It GETs /v1/flyedge/config on an interval to keep model_mode current, honor
@@ -148,13 +146,14 @@ func New(cfg Config, opts ...Option) (*Guard, error) {
 		return nil, cfg.cloudTelemetryEnvError
 	}
 	cfg = cfg.withDefaults()
-	g := &Guard{cfg: cfg, cloudTelemetry: *cfg.CloudTelemetry}
+	g := &Guard{cfg: cfg}
 	g.hostname, _ = os.Hostname()
 	g.simEnabled = true // WithSimulation(false) opts out
 
 	if err := applyOptions(g, opts); err != nil {
 		return nil, err
 	}
+	g.cfg = g.cfg.withDefaults()
 
 	// Build a signer from config unless one was injected via an option.
 	if g.signer == nil && hasKey(cfg) {
@@ -172,13 +171,13 @@ func New(cfg Config, opts ...Option) (*Guard, error) {
 	// Telemetry: cloud batcher by default (ship to /v1/flyedge/telemetry via the signed enforcer),
 	// an injected sink if one was set via WithTelemetry, else an in-memory recorder. Cloud wiring
 	// happens here (post-enforcer) so the sender can reuse the enforcer's signing.
-	if g.tel == nil && g.cloudTelemetry {
+	if g.tel == nil && *g.cfg.CloudTelemetry {
 		if sp, ok := g.enforcer.(signedPoster); ok {
 			sender := func(ctx context.Context, body []byte) error {
 				_, err := sp.PostSigned(ctx, "/v1/flyedge/telemetry", body)
 				return err
 			}
-			g.tel = telemetry.NewBatched(sender, "guard-"+randID(), g.telInterval)
+			g.tel = telemetry.NewBatched(sender, "guard-"+randID(), g.cfg.TelemetryInterval)
 		}
 	}
 	if g.tel == nil {

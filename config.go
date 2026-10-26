@@ -40,7 +40,9 @@ const DefaultAPIURL = "https://prism.p.compfly.ai"
 type Config struct {
 	// CloudTelemetry controls cloud event delivery (FLYEDGE_CLOUD_TELEMETRY).
 	// Nil defaults to true; false keeps telemetry local. Explicit Options override it.
-	CloudTelemetry         *bool
+	CloudTelemetry *bool
+	// TelemetryInterval is the cloud flush cadence. Values below one second use five seconds.
+	TelemetryInterval      time.Duration
 	cloudTelemetryEnvError error
 	// APIURL is the prism gateway base (COMPFLY_API_URL). Empty → DefaultAPIURL.
 	APIURL string
@@ -97,6 +99,9 @@ func (c Config) withDefaults() Config {
 		enabled = *c.CloudTelemetry
 	}
 	c.CloudTelemetry = &enabled
+	if c.TelemetryInterval < time.Second {
+		c.TelemetryInterval = 5 * time.Second
+	}
 	if c.APIURL == "" {
 		c.APIURL = DefaultAPIURL
 	}
