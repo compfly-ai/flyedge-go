@@ -179,6 +179,9 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 		return nil, err
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnprocessableEntity {
+		return nil, errors.New("flyedge: invocation registration rejected (HTTP 422); check the registration options and ensure the broker supports LeaseDuration and automatic renewal (a broker rollout may still be in progress)")
+	}
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("flyedge: invocation registration returned HTTP %d", response.StatusCode)
 	}
@@ -367,6 +370,10 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					cancelWork()
 				}
 			case "invoke":
+				if !time.Now().Before(c.ExpiresAt()) {
+					c.err = ErrConnectionExpired
+					return
+				}
 				r := f.Request
 				if r == nil || r.ID == "" || len(r.ID) > 128 {
 					c.err = errors.New("flyedge: malformed invocation")
