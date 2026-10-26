@@ -16,7 +16,7 @@ import (
 )
 
 // sdkVersion identifies this SDK in the manifest + telemetry.
-const sdkVersion = "flyedge-go/0.1.0"
+const sdkVersion = "flyedge-go/0.8.0"
 
 // signedPoster is implemented by the default HTTP enforcer; it lets Connect + cloud telemetry reuse
 // the enforcer's signed POST without widening the Enforcer interface (stub enforcers in tests need

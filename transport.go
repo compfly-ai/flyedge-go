@@ -133,7 +133,14 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 
 	// In-band proxy mode: route the ACTUAL call through prism /v1/proxy (prism enforces inline and
 	// forwards to the provider), instead of the out-of-band /check + direct forward.
-	if t.guard.cfg.ProxyMode {
+	var attachments []Attachment
+	if t.guard.NontextPayloadAllowed() {
+		var structured any
+		if json.Unmarshal(body, &structured) == nil {
+			attachments = ExtractAttachments(structured)
+		}
+	}
+	if t.guard.cfg.ProxyMode && len(attachments) == 0 {
 		return t.proxyForward(req, body)
 	}
 
@@ -147,11 +154,14 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		ComponentType: "LLM",
 		ComponentName: req.URL.Host,
 		MethodName:    "http",
-		Content:       Content{Full: prompt},
+		Content:       Content{Full: prompt, Attachments: attachments},
 		Operation:     Operation{Type: "chat.completions", ModelID: model},
 	})
 	if err != nil {
 		return nil, err // Deny/*DenyError → the SDK call fails; provider not contacted
+	}
+	if t.guard.cfg.ProxyMode {
+		return t.proxyForward(req, body)
 	}
 
 	resp, rerr := t.base.RoundTrip(req)

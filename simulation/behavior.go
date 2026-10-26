@@ -4,6 +4,7 @@
 package simulation
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -30,14 +31,8 @@ var (
 		regexp.MustCompile(`eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}`),
 		regexp.MustCompile(`(?i)(?:password|passwd|pwd|secret|token|api[_-]?key)\s*[:=]\s*\S+`),
 	}
-	urlPattern     = regexp.MustCompile(`https?://(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s]*)?`)
-	emailPattern   = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
-	webhookPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)https?://hooks\.slack\.com/`),
-		regexp.MustCompile(`(?i)https?://discord\.com/api/webhooks/`),
-		regexp.MustCompile(`(?i)https?://[\w.\-]+\.ngrok\.io`),
-		regexp.MustCompile(`(?i)https?://[\w.\-]+\.webhook\.site`),
-	}
+	urlPattern        = regexp.MustCompile(`https?://(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s]*)?`)
+	emailPattern      = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
 	privilegePatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)\b(?:admin|root|sudo|superuser|su)\b`),
 		regexp.MustCompile(`(?i)\bDELETE\b.*\b(?:FROM|WHERE)\b`),
@@ -116,13 +111,33 @@ func detectExfiltration(argsText, all string) []string {
 	if emailPattern.MatchString(argsText) {
 		flags = append(flags, "email_in_tool_args")
 	}
-	for _, wp := range webhookPatterns {
-		if wp.MatchString(all) {
+	for _, candidate := range urlPattern.FindAllString(all, -1) {
+		if isWebhookURL(candidate) {
 			flags = append(flags, "webhook_url_detected")
 			break
 		}
 	}
 	return flags
+}
+
+// Match the parsed host, not a domain substring in a URL. An attacker-controlled
+// host such as hooks.slack.com.example.com must not be labeled a Slack webhook.
+func isWebhookURL(candidate string) bool {
+	u, err := url.Parse(candidate)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	switch {
+	case host == "hooks.slack.com":
+		return strings.HasPrefix(u.EscapedPath(), "/")
+	case host == "discord.com":
+		return strings.HasPrefix(u.EscapedPath(), "/api/webhooks/")
+	case strings.HasSuffix(host, ".ngrok.io"), strings.HasSuffix(host, ".webhook.site"):
+		return true
+	default:
+		return false
+	}
 }
 
 func detectPrivilege(text string) []string {

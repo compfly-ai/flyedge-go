@@ -30,6 +30,7 @@ type (
 	Decision     = enforce.Decision
 	CheckRequest = enforce.CheckRequest
 	Content      = enforce.Content
+	Attachment   = enforce.Attachment
 	Operation    = enforce.Operation
 	// Enrichment context types (opt-in fields on CheckRequest).
 	ExecutionContext = enforce.ExecutionContext
@@ -107,17 +108,21 @@ type Guard struct {
 	// Config heartbeat poller: an owned goroutine started by Connect and stopped by
 	// Close. It GETs /v1/flyedge/config on an interval to keep model_mode current, honor
 	// manifest-refresh requests, and surface the simulation block. pollMu guards all fields below.
-	pollMu       sync.RWMutex
-	hostname     string
-	manifestInfo ManifestInfo
-	manifestHash string
-	modelMode    ModelMode
-	sim          *SimulationConfig
-	lastSimHash  string
-	pollInterval time.Duration // WithHeartbeat override; else set from ConnectResponse
-	pollStarted  bool
-	pollStop     chan struct{}
-	pollDone     chan struct{}
+	pollMu         sync.RWMutex
+	hostname       string
+	manifestInfo   ManifestInfo
+	manifestHash   string
+	modelMode      ModelMode
+	nontextAllowed bool
+	nontextAlways  bool // WithAttachments: set once at construction
+	nontextDID     string
+	nontextExpires time.Time
+	sim            *SimulationConfig
+	lastSimHash    string
+	pollInterval   time.Duration // WithHeartbeat override; else set from ConnectResponse
+	pollStarted    bool
+	pollStop       chan struct{}
+	pollDone       chan struct{}
 
 	onModeChange      func(old, cur ModelMode)
 	onManifestRefresh func()
@@ -191,6 +196,24 @@ func randID() string {
 // Check applies platform decisions unchanged. Mode is retained only for legacy
 // SDK-local detectors and never skips, weakens, or escalates a platform result.
 func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
+	if len(req.Content.Attachments) > 0 {
+		clean := mediaAuditText(req.Content.Full)
+		if clean != req.Content.Full {
+			req.Content.Hash = ""
+			req.Content.SizeBytes = 0
+		}
+		req.Content.Full = clean
+		req.Content.Preview = mediaAuditText(req.Content.Preview)
+		req.Operation.ToolArgsJSON = mediaAuditText(req.Operation.ToolArgsJSON)
+	}
+	if !g.NontextPayloadAllowed() && len(req.Content.Attachments) > 0 {
+		req.Content.Attachments = nil
+		req.Content.Hash = ""
+		req.Content.SizeBytes = 0
+	}
+	if len(req.Content.Attachments) > 0 {
+		req.Content.Hash = ""
+	}
 	// Default correlation ids once, so every gate — including the manual
 	// CheckToolCall/CheckToolResponse/CheckModelResponse helpers, not just the
 	// transport wrap — carries a request_id into /check and telemetry. SessionID
@@ -271,6 +294,27 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 
 	start := time.Now()
 	dec, cerr := g.enforcer.Check(ctx, req)
+	mediaRequest := len(req.Content.Attachments) > 0
+	// Optional media failures fall back once to the existing text-only check.
+	// Control denials and kills remain authoritative.
+	if mediaRequest && (cerr != nil || mediaInspectionUnavailable(dec)) {
+		var killed *enforce.KilledError
+		if !errors.As(cerr, &killed) && len(dec.Kills) == 0 {
+			fallback := req
+			fallback.RequestID = "req-" + randHex()
+			fallback.Content.Attachments = nil
+			fallback.Content.Hash = ""
+			dec, cerr = g.enforcer.Check(ctx, fallback)
+			dec.NontextStatus = "uninspected"
+		}
+	}
+	if cerr == nil && mediaRequest && dec.NontextStatus != "uninspected" {
+		status, confirmed := mediaAcknowledgment(dec)
+		dec.NontextStatus = status
+		if !confirmed && dec.Action != ActionDeny && len(dec.Kills) == 0 {
+			cerr = errors.New("nontext_unconfirmed: receiver did not acknowledge attachment inspection")
+		}
+	}
 	latencyMS := float64(time.Since(start).Microseconds()) / 1000.0
 
 	var result Decision
@@ -319,6 +363,10 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 		"decision": string(result.Action),
 		"stage":    string(req.Stage),
 		"relay":    verdictRelay(ctx),
+	}
+	if len(req.Content.Attachments) > 0 {
+		ev.Data["nontext_status"] = dec.NontextStatus
+		result.NontextStatus = dec.NontextStatus
 	}
 	g.tel.Record(ev)
 	return result, retErr
