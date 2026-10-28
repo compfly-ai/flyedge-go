@@ -31,7 +31,7 @@ func InboundHandler(next http.Handler) http.Handler {
 		if session != "" {
 			m := inboundTrace.FindStringSubmatch(singleHeader(r.Header, "Traceparent"))
 			if m != nil && m[1] != "ff" && m[2] != strings.Repeat("0", 32) && m[3] != strings.Repeat("0", 16) {
-				ctx = ContextWithTrace(ctx, m[2], "") // Each check creates its own span.
+				ctx = ContextWithTrace(ctx, m[2], m[3]) // Each check creates its own child span.
 			}
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
