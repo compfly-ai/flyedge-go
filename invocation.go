@@ -289,6 +289,31 @@ func (c *InvocationConnection) send(ctx context.Context, f invocationFrame) erro
 	defer cancel()
 	return wsjson.Write(ctx, c.ws, f)
 }
+
+// invocationHeartbeat keeps the invocation socket active independently of the
+// HTTP config poller and lease renewal. Ping handles matching pongs; serve's
+// reader must remain active while it waits. Each ping has its own deadline.
+func invocationHeartbeat(ctx context.Context, ws *websocket.Conn, interval, timeout time.Duration) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, timeout)
+			err := ws.Ping(pingCtx)
+			cancel()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h InvocationHandler) {
 	defer close(c.done)
 	defer c.cancel()
@@ -301,6 +326,10 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 	results := make(chan result, 1)
 	frames := make(chan invocationFrame)
 	readErr := make(chan error, 1)
+	heartbeatErr := make(chan error, 1)
+	go func() {
+		heartbeatErr <- invocationHeartbeat(c.ctx, c.ws, 30*time.Second, 30*time.Second)
+	}()
 	go func() {
 		for {
 			var f invocationFrame
@@ -351,8 +380,15 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 		case <-c.ctx.Done():
 			c.err = c.ctx.Err()
 			return
-		case <-readErr:
-			c.err = ErrInvocationOutcomeUnknown
+		case err := <-heartbeatErr:
+			if c.ctx.Err() != nil {
+				c.err = c.ctx.Err()
+			} else {
+				c.err = fmt.Errorf("%w: websocket heartbeat: %w", ErrInvocationOutcomeUnknown, err)
+			}
+			return
+		case err := <-readErr:
+			c.err = fmt.Errorf("%w: websocket read: %w", ErrInvocationOutcomeUnknown, err)
 			return
 		case r := <-results:
 			r.out.mu.Lock()

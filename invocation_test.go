@@ -291,3 +291,44 @@ func TestClientStateDefaultsEnabledAndPreservesTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestInvocationHeartbeatUsesLibraryPingPong(t *testing.T) {
+	_, c := invocationFixture(t, func(ctx context.Context, ws *websocket.Conn) {
+		// Reading automatically answers control-frame pings without application messages.
+		_, _, _ = ws.Read(ctx)
+	})
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 160*time.Millisecond)
+	defer cancel()
+	err := invocationHeartbeat(ctx, c.ws, 20*time.Millisecond, 100*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("heartbeat failed before the test ended")
+	}
+}
+
+func TestInvocationHeartbeatTimesOutWithoutPong(t *testing.T) {
+	_, c := invocationFixture(t, func(ctx context.Context, ws *websocket.Conn) {
+		// Deliberately do not read, so the library cannot answer pings.
+		<-ctx.Done()
+	})
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := invocationHeartbeat(ctx, c.ws, 20*time.Millisecond, 40*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		t.Fatalf("expected pong deadline before parent deadline, got %v", err)
+	}
+}
+
+func TestInvocationReadErrorPreservesCause(t *testing.T) {
+	_, c := invocationFixture(t, func(ctx context.Context, ws *websocket.Conn) {
+		_ = ws.Close(websocket.StatusGoingAway, "test shutdown")
+	})
+	err := c.Wait()
+	if !errors.Is(err, ErrInvocationOutcomeUnknown) || websocket.CloseStatus(err) != websocket.StatusGoingAway {
+		t.Fatalf("lost socket error detail: %v", err)
+	}
+}
