@@ -183,6 +183,14 @@ must populate these optional fields; the SDK does not collect it automatically.
 
 ## Explicit platform invocations
 
+The SDK sends a WebSocket Ping every 30 seconds and waits up to 30 seconds for
+the matching Pong using the WebSocket library. This runs independently of HTTP
+configuration polling, lease renewal, and agent work. A heartbeat failure ends
+the connection without reconnecting or replaying requests. Socket errors retain
+the underlying cause while remaining compatible with
+`errors.Is(err, flyedge.ErrInvocationOutcomeUnknown)`.
+
+
 `Guard.ServeInvocations` lets Playground, simulations, and evaluations invoke an
 application handler over an outbound WebSocket. Calling `New` or `Connect` does
 not enable it: your application must explicitly register a handler and authorize
