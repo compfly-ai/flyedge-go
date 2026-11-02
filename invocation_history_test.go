@@ -31,3 +31,28 @@ func TestProvidedHistoryRemainsSeparateAndRequiresOptIn(t *testing.T) {
 		t.Fatal("lost explicit empty history")
 	}
 }
+
+func TestInvocationToolHistory(t *testing.T) {
+	raw := `[{"role":"assistant","toolCalls":[{"id":"a","name":"read_messages","arguments":{"folder":"inbox"}}]},{"role":"tool","toolCallId":"a","content":"MAPLE-482"}]`
+	var h []InvocationMessage
+	if err := json.Unmarshal([]byte(raw), &h); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateInvocationHistory(&h, true); err != nil {
+		t.Fatal(err)
+	}
+	if h[0].ToolCalls[0].Arguments["folder"] != "inbox" || h[1].ToolCallID != "a" {
+		t.Fatal("lost fields")
+	}
+	if validateInvocationHistory(&h, false) == nil {
+		t.Fatal("ignored opt-in")
+	}
+	h[1].ToolCallID = "orphan"
+	if validateInvocationHistory(&h, true) == nil {
+		t.Fatal("accepted orphan")
+	}
+	h = h[:1]
+	if validateInvocationHistory(&h, true) == nil {
+		t.Fatal("accepted incomplete exchange")
+	}
+}

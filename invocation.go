@@ -38,9 +38,16 @@ var ErrConnectionExpired = errors.New("flyedge: invocation lease expired")
 var ErrConnectionRevoked = errors.New("flyedge: invocation connection revoked")
 var ErrInvocationOutcomeUnknown = errors.New("flyedge: invocation connection lost; in-flight outcomes may be unknown")
 
+type InvocationToolCall struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
 type InvocationMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string               `json:"role"`
+	Content    string               `json:"content"`
+	ToolCalls  []InvocationToolCall `json:"toolCalls,omitempty"`
+	ToolCallID string               `json:"toolCallId,omitempty"`
 }
 type InvocationRequest struct {
 	// History is a caller-provided test fixture, separate from live Messages.
@@ -552,13 +559,17 @@ func validateInvocationHistory(history *[]InvocationMessage, allowed bool) error
 	if !allowed {
 		return errors.New("client history not authorized")
 	}
-	if len(*history) > 128 {
-		return errors.New("history exceeds 128 messages")
+	data, err := json.Marshal(*history)
+	if err != nil {
+		return err
 	}
-	for _, message := range *history {
-		if (message.Role != "user" && message.Role != "assistant") || strings.TrimSpace(message.Content) == "" {
-			return errors.New("history requires nonempty user or assistant messages")
-		}
+	var messages []any
+	if err := json.Unmarshal(data, &messages); err != nil {
+		return err
+	}
+	issues := validateHistoryMessages(messages)
+	if len(issues) > 0 {
+		return errors.New(issues[0].Message)
 	}
 	return nil
 }

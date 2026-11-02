@@ -177,7 +177,7 @@ not useful. Boolean false, numeric zero, empty strings, and JSON null are retain
 Set `InvocationOptions.AllowClientHistory: true` to accept the optional
 `InvocationRequest.History` fixture over reverse invocation. It defaults to
 false and is independently enforced by the broker and SDK. `History` is a
-pointer to an ordered slice of text-only user/assistant messages (at most 128):
+pointer to an ordered slice of user/assistant and linked tool messages (at most 128):
 nil means absent, a pointer to an empty slice means an explicit empty fixture.
 It is separate from live `Messages` and structured `State`.
 
@@ -186,3 +186,9 @@ the SDK never applies it automatically. The scenario runner sends the same
 fixture on each live turn, so stateful handlers should initialize once per
 session; stateless handlers can prepend it to the live messages each time.
 Preserve the application's system policy and do not replay historical tool calls.
+
+`InvocationMessage.ToolCalls` contains `InvocationToolCall{ID, Name, Arguments}`;
+`ToolCallID` links a `Role: "tool"` response to its historical assistant call.
+Arguments are a JSON object; response Content is text. All calls must have one
+response before another conversational message or the end of history. Map these
+records into your model provider format; never execute fixture calls again.
