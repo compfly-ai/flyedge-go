@@ -43,6 +43,7 @@ func (g *Guard) recordSimEvent(req CheckRequest) {
 	var bi simulation.BehaviorInput
 	switch req.Stage {
 	case StageToolCall:
+		g.simCtl.ObserveScenarioTool(req.SessionID, "component.requested", req.Operation.ToolName, map[string]any{"arguments": jsonAnyOrString(req.Operation.ToolArgsJSON)})
 		ev.ComponentType = "tool"
 		ev.ToolName = req.Operation.ToolName
 		ev.ToolArgs = jsonAnyOrString(req.Content.Full)

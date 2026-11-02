@@ -52,11 +52,20 @@ func newTransport(url, jwt string) *transport {
 func (t *transport) start() { go t.run() }
 
 // send enqueues a JSON event. Non-blocking; drops if the queue is full.
-func (t *transport) send(eventJSON string) {
+func (t *transport) send(eventJSON string) { t.trySend(eventJSON) }
+func (t *transport) trySend(eventJSON string) bool {
 	select {
 	case <-t.stop:
+		return false
+	default:
+	}
+	select {
+	case <-t.stop:
+		return false
 	case t.queue <- eventJSON:
-	default: // queue full — drop rather than block the agent
+		return true
+	default:
+		return false
 	}
 }
 

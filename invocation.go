@@ -505,6 +505,10 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				work = ContextWithSession(work, r.SessionID)
 				work = context.WithValue(work, invocationContextKey{}, invocationScope{r.RunID, o.AllowSimulationInjection})
 				out := &invocationOutput{c: c, id: r.ID}
+				planID := ""
+				if g.simCtl != nil {
+					planID = g.simCtl.ScenarioToken()
+				}
 				go func(req InvocationRequest) {
 					var err error
 					func() {
@@ -517,6 +521,9 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					}()
 					if err == nil {
 						err = work.Err()
+					}
+					if g.simCtl != nil {
+						g.simCtl.FinishScenario(req.RunID, req.SessionID, planID, err == nil)
 					}
 					select {
 					case results <- result{req.ID, err, out}:
