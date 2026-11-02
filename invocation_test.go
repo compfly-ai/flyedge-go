@@ -51,6 +51,9 @@ func invocationLeaseFixture(t *testing.T, duration time.Duration, autoRenew *boo
 	return invocationStateFixture(t, duration, autoRenew, nil, peer)
 }
 func invocationStateFixture(t *testing.T, duration time.Duration, autoRenew *bool, allowState *bool, peer func(context.Context, *websocket.Conn)) (*Guard, *InvocationConnection) {
+	return invocationHistoryFixture(t, duration, autoRenew, allowState, false, peer)
+}
+func invocationHistoryFixture(t *testing.T, duration time.Duration, autoRenew *bool, allowState *bool, allowHistory bool, peer func(context.Context, *websocket.Conn)) (*Guard, *InvocationConnection) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
@@ -93,13 +96,17 @@ func invocationStateFixture(t *testing.T, duration time.Duration, autoRenew *boo
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { g.Close() })
-	c, err := g.ServeInvocations(ctx, InvocationOptions{AllowClientState: allowState, Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: duration, AutoRenew: autoRenew, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, w InvocationWriter) error {
+	c, err := g.ServeInvocations(ctx, InvocationOptions{AllowClientHistory: allowHistory, AllowClientState: allowState, Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: duration, AutoRenew: autoRenew, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, w InvocationWriter) error {
 		if r.SessionID != "session" || sessionFromContext(ctx) != "session" {
 			return errors.New("missing session context")
 		}
 		if r.Messages[0].Content == "wait" {
 			<-ctx.Done()
 			return ctx.Err()
+		}
+		if r.History != nil {
+			data, _ := json.Marshal(r.History)
+			return w.TextDelta(ctx, string(data))
 		}
 		if r.State != nil {
 			data, err := json.Marshal(r.State)
@@ -330,5 +337,36 @@ func TestInvocationReadErrorPreservesCause(t *testing.T) {
 	err := c.Wait()
 	if !errors.Is(err, ErrInvocationOutcomeUnknown) || websocket.CloseStatus(err) != websocket.StatusGoingAway {
 		t.Fatalf("lost socket error detail: %v", err)
+	}
+}
+
+func TestHistoryDeliveryAndRejectionOverReverseChannel(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		_, c := invocationHistoryFixture(t, time.Minute, nil, nil, allowed, func(ctx context.Context, ws *websocket.Conn) {
+			request := map[string]any{"id": "history", "purpose": "playground", "session_id": "session", "messages": []InvocationMessage{{Role: "user", Content: "Which city?"}}, "history": []InvocationMessage{{Role: "assistant", Content: "Kyoto"}}, "deadline": time.Now().Add(time.Minute)}
+			if err := wsjson.Write(ctx, ws, map[string]any{"type": "invoke", "request": request}); err != nil {
+				t.Error(err)
+				return
+			}
+			var frame invocationFrame
+			if err := wsjson.Read(ctx, ws, &frame); err != nil {
+				t.Error(err)
+				return
+			}
+			if allowed {
+				if frame.Type != "delta" || !strings.Contains(frame.Text, "Kyoto") {
+					t.Errorf("history lost: %+v", frame)
+				}
+				if err := wsjson.Read(ctx, ws, &frame); err != nil || frame.Type != "completed" {
+					t.Errorf("completion: %+v %v", frame, err)
+				}
+			} else if frame.Error != "client history not authorized" {
+				t.Errorf("not rejected: %+v", frame)
+			}
+			_ = wsjson.Write(ctx, ws, invocationFrame{Type: "revoked"})
+		})
+		if err := c.Wait(); !errors.Is(err, ErrConnectionRevoked) {
+			t.Fatal(err)
+		}
 	}
 }

@@ -43,7 +43,10 @@ type InvocationMessage struct {
 	Content string `json:"content"`
 }
 type InvocationRequest struct {
-	ContractVersion string `json:"contract_version,omitempty"`
+	// History is a caller-provided test fixture, separate from live Messages.
+	// The handler owns applying it; nil is absent, pointer to empty is explicit empty.
+	History         *[]InvocationMessage `json:"history,omitempty"`
+	ContractVersion string               `json:"contract_version,omitempty"`
 	// State contains client-owned UI/session context, never authorization claims.
 	// Nil means absent; a non-nil empty map means an explicitly empty profile.
 	State     map[string]json.RawMessage `json:"state,omitempty"`
@@ -58,6 +61,8 @@ type InvocationRequest struct {
 // InvocationOptions grants only the listed purposes for this serving session.
 // The handler runs with the application's real credentials. This is not a sandbox.
 type InvocationOptions struct {
+	// AllowClientHistory opts in to test history; defaults to false.
+	AllowClientHistory bool `json:"allow_client_history"`
 	// Contract is published by the platform before this connection can serve.
 	Contract *InvocationContract `json:"contract,omitempty"`
 	// AllowClientState defaults to true when nil. Set a pointer to false to reject client state.
@@ -454,6 +459,8 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					reason = "invocation contract version mismatch"
 				} else if r.State != nil && !*o.AllowClientState {
 					reason = "client state not authorized"
+				} else if err := validateInvocationHistory(r.History, o.AllowClientHistory); err != nil {
+					reason = err.Error()
 				} else if _, duplicate := seen[r.ID]; duplicate {
 					reason = "duplicate invocation"
 				} else if active != "" {
@@ -536,4 +543,22 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 			}
 		}
 	}
+}
+
+func validateInvocationHistory(history *[]InvocationMessage, allowed bool) error {
+	if history == nil {
+		return nil
+	}
+	if !allowed {
+		return errors.New("client history not authorized")
+	}
+	if len(*history) > 128 {
+		return errors.New("history exceeds 128 messages")
+	}
+	for _, message := range *history {
+		if (message.Role != "user" && message.Role != "assistant") || strings.TrimSpace(message.Content) == "" {
+			return errors.New("history requires nonempty user or assistant messages")
+		}
+	}
+	return nil
 }
