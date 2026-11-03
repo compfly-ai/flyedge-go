@@ -469,3 +469,14 @@ func TestConcurrentInvocationPrivateSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInvocationObservationDoesNotRequireInjection(t *testing.T) {
+	for _, raw := range []string{`{"overrides":[]}`, `{"overrides":[{"enabled":false}]}`} {
+		if scenarioPlanRequiresInjection(json.RawMessage(raw)) {
+			t.Fatal("observation requires injection")
+		}
+	}
+	if !scenarioPlanRequiresInjection(json.RawMessage(`{"overrides":[{}]}`)) {
+		t.Fatal("enabled mock requires permission")
+	}
+}

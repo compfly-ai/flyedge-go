@@ -528,7 +528,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					continue
 				}
 				if len(r.ScenarioPlan) > 0 {
-					if !o.AllowSimulationInjection || r.RunID == "" || !strings.HasPrefix(r.SessionID, "eval:"+r.RunID+":") || g.simCtl == nil {
+					if (!o.AllowSimulationInjection && scenarioPlanRequiresInjection(r.ScenarioPlan)) || r.RunID == "" || !strings.HasPrefix(r.SessionID, "eval:"+r.RunID+":") || g.simCtl == nil {
 						reason = "scenario plan requires authorized simulation scope"
 					} else if err := g.simCtl.BeginExecution(r.SessionID, r.ScenarioPlan); err != nil {
 						reason = err.Error()
@@ -611,4 +611,21 @@ func validateInvocationHistory(history *[]InvocationMessage, allowed bool) error
 		return errors.New(issues[0].Message)
 	}
 	return nil
+}
+
+func scenarioPlanRequiresInjection(raw json.RawMessage) bool {
+	var p struct {
+		Overrides []struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"overrides"`
+	}
+	if json.Unmarshal(raw, &p) != nil {
+		return true
+	}
+	for _, r := range p.Overrides {
+		if r.Enabled == nil || *r.Enabled {
+			return true
+		}
+	}
+	return false
 }
