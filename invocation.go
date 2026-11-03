@@ -87,9 +87,9 @@ type InvocationOptions struct {
 	RequestTimeout time.Duration `json:"-"`
 	// AllowInsecureLoopback permits HTTP only to a literal loopback address for local tests.
 	AllowInsecureLoopback bool `json:"-"`
-	// AllowSimulationInjection explicitly permits the existing simulation mutation hooks.
-	// Unprotected baseline runs are not supported by remote invocation v1.
-	AllowSimulationInjection bool `json:"allow_simulation_injection"`
+	// AllowSimulationInjection defaults to true when nil for reverse invocation.
+	// Set a pointer to false to reject injected mocks.
+	AllowSimulationInjection *bool `json:"allow_simulation_injection"`
 }
 
 func (o InvocationOptions) validate() (InvocationOptions, error) {
@@ -104,6 +104,11 @@ func (o InvocationOptions) validate() (InvocationOptions, error) {
 	if err != nil {
 		return o, err
 	}
+	allowInjection := true
+	if o.AllowSimulationInjection != nil {
+		allowInjection = *o.AllowSimulationInjection
+	}
+	o.AllowSimulationInjection = &allowInjection
 	allowState := true
 	if o.AllowClientState != nil {
 		allowState = *o.AllowClientState
@@ -501,7 +506,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 						reason = "unprotected baseline not authorized"
 					} else if r.RunID != g.simCtl.RunID() {
 						reason = "active simulation belongs to another run"
-					} else if !o.AllowSimulationInjection {
+					} else if !*o.AllowSimulationInjection {
 						reason = "simulation hooks require explicit permission"
 					}
 				}
@@ -528,7 +533,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					continue
 				}
 				if len(r.ScenarioPlan) > 0 {
-					if (!o.AllowSimulationInjection && scenarioPlanRequiresInjection(r.ScenarioPlan)) || r.RunID == "" || !strings.HasPrefix(r.SessionID, "eval:"+r.RunID+":") || g.simCtl == nil {
+					if (!*o.AllowSimulationInjection && scenarioPlanRequiresInjection(r.ScenarioPlan)) || r.RunID == "" || !strings.HasPrefix(r.SessionID, "eval:"+r.RunID+":") || g.simCtl == nil {
 						reason = "scenario plan requires authorized simulation scope"
 					} else if err := g.simCtl.BeginExecution(r.SessionID, r.ScenarioPlan); err != nil {
 						reason = err.Error()
@@ -550,7 +555,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				active[r.ID] = activeWork{stop, r.SessionID}
 				sessions[r.SessionID] = true
 				work = ContextWithSession(work, r.SessionID)
-				work = context.WithValue(work, invocationContextKey{}, invocationScope{r.RunID, o.AllowSimulationInjection})
+				work = context.WithValue(work, invocationContextKey{}, invocationScope{r.RunID, *o.AllowSimulationInjection})
 				out := &invocationOutput{c: c, id: r.ID}
 				planID := ""
 				if g.simCtl != nil {

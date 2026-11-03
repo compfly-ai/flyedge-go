@@ -71,7 +71,7 @@ func TestCanonicalInvocationCompletion(t *testing.T) {
 			defer g.Close()
 			g.simCtl = simulation.New("test")
 			g.simCtl.OnConfigChange(&simulation.Config{Active: true, RunID: "run", TelemetryJWT: "evidence", TelemetryURL: "ws" + strings.TrimPrefix(tr.URL, "http"), Extra: json.RawMessage(`{"scenario_overrides":{"id":"p","session_id":"session","step_id":"ask","overrides":[]}}`)})
-			_, err = g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposeEval}, AllowSimulationInjection: true, AllowInsecureLoopback: true, LeaseDuration: time.Minute}, func(ctx context.Context, _ InvocationRequest, _ InvocationWriter) error {
+			_, err = g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposeEval}, AllowInsecureLoopback: true, LeaseDuration: time.Minute}, func(ctx context.Context, _ InvocationRequest, _ InvocationWriter) error {
 				switch outcome {
 				case "error":
 					return errors.New("failed")

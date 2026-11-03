@@ -243,6 +243,7 @@ selects the local or hosted deployment.
 
 | API | Behavior |
 | --- | --- |
+| `AllowSimulationInjection` | Defaults to enabled when `nil` for reverse invocation. Set a `*bool` pointing to `false` to disable injected mocks. |
 | `InvocationOptions.Purposes` | Explicitly permits `PurposePlayground`, `PurposeSimulation`, and/or `PurposeEval`. |
 | `LeaseDuration` | Renewable authorization window, default one hour; accepted range 1 second–24 hours. |
 | `AutoRenew` | `*bool`, default true when nil. A pointer to false creates a finite lease. Renewal keeps the same connection alive until stopped or revoked. |
@@ -293,3 +294,9 @@ when toggling state off and back on. No default is sent while state is disabled.
 Scenarios and runtime requests never have missing fields filled automatically;
 they continue to carry exactly their supplied state. Omit the default when it is
 not useful. Boolean false, numeric zero, empty strings, and JSON null are retained.
+
+Reverse-invocation injection is enabled by default; endpoint integrations are unchanged.
+`AllowSimulationInjection` is now `*bool`, matching the optional-state convention.
+Existing callers setting it to `true` can omit it; callers disabling it should use
+`disabled := false` and `AllowSimulationInjection: &disabled`. This default does not
+create mocks: scenario overrides and the application's before-tool hook still control them.

@@ -61,7 +61,7 @@ func run() error {
 			"selected_order_id": {Type: flyedge.StateString, PlaygroundDefault: json.RawMessage(`"DEMO-42"`)},
 			"form":              {Type: flyedge.StateJSON, PlaygroundDefault: json.RawMessage(`{}`)},
 		}}},
-		AllowSimulationInjection: true,
+
 		// Local Tilt uses HTTP. The SDK limits this exception to literal loopback addresses.
 		AllowInsecureLoopback: true,
 	}, handler(g, logger))

@@ -102,7 +102,8 @@ func invocationCapacityFixture(t *testing.T, duration time.Duration, autoRenew *
 	if len(mockPlans) > 0 && mockPlans[0] {
 		g.simCtl = simulation.New("test")
 	}
-	c, err := g.ServeInvocations(ctx, InvocationOptions{AllowSimulationInjection: len(mockPlans) > 0 && mockPlans[0], MaxConcurrentInvocations: capacity, AllowClientHistory: allowHistory, AllowClientState: allowState, Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: duration, AutoRenew: autoRenew, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, w InvocationWriter) error {
+	allowInjection := len(mockPlans) > 0 && mockPlans[0]
+	c, err := g.ServeInvocations(ctx, InvocationOptions{AllowSimulationInjection: &allowInjection, MaxConcurrentInvocations: capacity, AllowClientHistory: allowHistory, AllowClientState: allowState, Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: duration, AutoRenew: autoRenew, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, w InvocationWriter) error {
 		if r.SessionID == "" || sessionFromContext(ctx) != r.SessionID {
 			return errors.New("missing session context")
 		}
@@ -478,5 +479,34 @@ func TestInvocationObservationDoesNotRequireInjection(t *testing.T) {
 	}
 	if !scenarioPlanRequiresInjection(json.RawMessage(`{"overrides":[{}]}`)) {
 		t.Fatal("enabled mock requires permission")
+	}
+}
+
+func TestInvocationInjectionDefaultAndOptOut(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		o := InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposeEval}}
+		if !enabled {
+			o.AllowSimulationInjection = &enabled
+		}
+		normalized, err := o.validate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if normalized.AllowSimulationInjection == nil || *normalized.AllowSimulationInjection != enabled {
+			t.Fatal("injection default or explicit opt-out lost")
+		}
+		raw, err := json.Marshal(normalized)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire struct {
+			Enabled bool `json:"allow_simulation_injection"`
+		}
+		if err := json.Unmarshal(raw, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if wire.Enabled != enabled {
+			t.Fatal("registration permission disagrees with local enforcement")
+		}
 	}
 }
