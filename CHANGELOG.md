@@ -2,6 +2,9 @@
 
 ## Unreleased — 0.8.0
 
+- Add explicit canonical scenario tool mocks and separate requested, mocked and executed evidence, with scoped reverse-invocation completion snapshots. See [canonical scenario integration](docs/CANONICAL_SCENARIOS.md).
+- Preserve scenario evidence when simulation telemetry credentials renew.
+
 Optional inspection of text in images and PDFs sent by your agents. Enable it per agent to include supported attachments in policy checks. Inspection is disabled by default and may add latency.
 
 - Reuses the existing agent configuration refresh and shared SDK policy boundaries.

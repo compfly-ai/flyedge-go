@@ -37,7 +37,10 @@ const profileMinInterval = 5 * time.Second
 // SimulationConfigHandler, adapted to Go's explicit interception model (no middleware
 // orchestrator — the Guard's own seams call Record).
 type Controller struct {
-	framework string
+	framework  string
+	lifecycle  sync.Mutex
+	mocks      scenarioMocks
+	executions map[string]*scenarioMocks
 
 	mu           sync.Mutex
 	state        State
@@ -85,10 +88,50 @@ func (c *Controller) RunID() string {
 	return c.runID
 }
 
+// InvocationRejection checks one active configuration snapshot. Observation does
+// not require injection permission. Baseline bypass is rejected, and mutation
+// hooks require injection permission.
+func (c *Controller) InvocationRejection(runID string, allowInjection bool) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state != StateActive {
+		return ""
+	}
+	if c.protDisabled {
+		return "unprotected baseline not authorized"
+	}
+	if runID != c.runID {
+		return "active simulation belongs to another run"
+	}
+	if !allowInjection {
+		if c.mocks.plan != nil {
+			for _, rule := range c.mocks.plan.Overrides {
+				if rule.enabled() {
+					return "simulation hooks require explicit permission"
+				}
+			}
+		}
+		var extra struct {
+			AttackInjector struct {
+				Mode string `json:"mode"`
+			} `json:"attack_injector"`
+		}
+		if c.cfg != nil {
+			_ = json.Unmarshal(c.cfg.Extra, &extra)
+		}
+		if extra.AttackInjector.Mode == "attack" {
+			return "simulation hooks require explicit permission"
+		}
+	}
+	return ""
+}
+
 // OnConfigChange reacts to the simulation block from the config poll. nil ⇒ no
 // simulation (deactivate if running). A changed run_id restarts; the same run_id
 // hot-swaps config (tier transitions).
 func (c *Controller) OnConfigChange(sim *Config) {
+	c.lifecycle.Lock()
+	defer c.lifecycle.Unlock()
 	if sim == nil || !sim.Valid() {
 		c.mu.Lock()
 		running := c.state == StateActive || c.state == StateStarting
@@ -102,8 +145,22 @@ func (c *Controller) OnConfigChange(sim *Config) {
 	c.mu.Lock()
 	if c.state == StateActive {
 		if sim.RunID == c.runID {
+			oldTransport := c.tr
+			renewed := c.cfg.TelemetryURL != sim.TelemetryURL || c.cfg.TelemetryJWT != sim.TelemetryJWT
+			if renewed {
+				c.tr = newTransport(sim.TelemetryURL, sim.TelemetryJWT)
+				c.tr.start()
+			}
 			c.cfg = sim
+			c.protDisabled = sim.ProtectionDisabled
+			c.emit = sim.HasMiddleware("telemetry")
+			c.monitor = sim.HasMiddleware("behavior_monitor")
+			c.mocks.configure(scenarioRaw(sim.Extra))
+			c.scenarioSnapshotLocked("ready", true)
 			c.mu.Unlock()
+			if renewed {
+				oldTransport.Stop()
+			}
 			c.handleUpdate(sim) // same run — tier hot-swap
 			return
 		}
@@ -131,6 +188,8 @@ func (c *Controller) SetManifest(tools, models []string) {
 
 // Stop force-deactivates on Guard shutdown.
 func (c *Controller) Stop() {
+	c.lifecycle.Lock()
+	defer c.lifecycle.Unlock()
 	c.mu.Lock()
 	running := c.state != StateInactive
 	c.mu.Unlock()
@@ -249,10 +308,12 @@ func (c *Controller) activate(sim *Config) {
 	c.state = StateActive
 	c.runID = sim.RunID
 	c.cfg = sim
+	c.mocks.configure(scenarioRaw(sim.Extra))
 	c.protDisabled = sim.ProtectionDisabled
 	c.emit = sim.HasMiddleware("telemetry")
 	c.monitor = sim.HasMiddleware("behavior_monitor")
 	c.tr = tr
+	c.scenarioSnapshotLocked("ready", true)
 	c.prof = prof
 	c.lastProfile = time.Time{}
 	tools, models := c.manifestTools, c.manifestModels
@@ -296,6 +357,7 @@ func (c *Controller) deactivate() {
 	c.cfg = nil
 	c.prof = nil
 	c.inj = nil
+	c.mocks = scenarioMocks{}
 	c.mu.Unlock()
 }
 

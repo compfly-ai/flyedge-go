@@ -202,6 +202,9 @@ func (g *Guard) RecordToolIO(sessionID, requestID, toolName, argsJSON, resultJSO
 
 // RecordToolIODetail emits an attributed tool_io event from a full ToolIO.
 func (g *Guard) RecordToolIODetail(c ToolIO) {
+	if g != nil && g.simCtl != nil {
+		g.simCtl.ObserveScenarioTool(c.SessionID, "component.executed", c.ToolName, map[string]any{"result": jsonAnyOrString(c.ResultJSON), "error": c.Err})
+	}
 	if g == nil || g.tel == nil {
 		return
 	}

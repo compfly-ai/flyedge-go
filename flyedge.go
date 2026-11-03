@@ -270,8 +270,10 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	// Simulation: when a run is active, observe the operation (stream a RuntimeEvent) and — if the
 	// run requested protection be disabled (baseline eval) — bypass the policy check with an allow,
 	// so the agent's raw behavior is measured. Deny/kill still enforce when protection is NOT disabled.
-	if g.simCtl != nil && g.simCtl.Active() {
-		if scope, ok := ctx.Value(invocationContextKey{}).(invocationScope); ok && (g.simCtl.ProtectionDisabled() || scope.runID != g.simCtl.RunID() || !scope.allowInjection) {
+	if g.simCtl != nil && g.simCtl.HasExecution(req.SessionID) {
+		g.recordSimEvent(req)
+	} else if g.simCtl != nil && g.simCtl.Active() {
+		if scope, ok := ctx.Value(invocationContextKey{}).(invocationScope); ok && g.simCtl.InvocationRejection(scope.runID, scope.allowInjection) != "" {
 			dec := Decision{Action: ActionDeny, Reason: "remote_simulation_not_authorized"}
 			return dec, &DenyError{Decision: dec}
 		}
