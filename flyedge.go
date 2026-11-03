@@ -273,7 +273,7 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	if g.simCtl != nil && g.simCtl.HasExecution(req.SessionID) {
 		g.recordSimEvent(req)
 	} else if g.simCtl != nil && g.simCtl.Active() {
-		if scope, ok := ctx.Value(invocationContextKey{}).(invocationScope); ok && (g.simCtl.ProtectionDisabled() || scope.runID != g.simCtl.RunID() || !scope.allowInjection) {
+		if scope, ok := ctx.Value(invocationContextKey{}).(invocationScope); ok && g.simCtl.InvocationRejection(scope.runID, scope.allowInjection) != "" {
 			dec := Decision{Action: ActionDeny, Reason: "remote_simulation_not_authorized"}
 			return dec, &DenyError{Decision: dec}
 		}

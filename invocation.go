@@ -501,14 +501,8 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				}
 				// Simulation permissions never follow from invocation permission. Reject baseline
 				// bypass and require the invocation to belong to the active simulation run.
-				if g.simCtl != nil && g.simCtl.Active() {
-					if g.simCtl.ProtectionDisabled() {
-						reason = "unprotected baseline not authorized"
-					} else if r.RunID != g.simCtl.RunID() {
-						reason = "active simulation belongs to another run"
-					} else if !*o.AllowSimulationInjection {
-						reason = "simulation hooks require explicit permission"
-					}
+				if reason == "" && g.simCtl != nil {
+					reason = g.simCtl.InvocationRejection(r.RunID, *o.AllowSimulationInjection)
 				}
 				if reason != "" {
 					if c.send(c.ctx, invocationFrame{Type: "failed", ID: r.ID, Error: reason}) != nil {
