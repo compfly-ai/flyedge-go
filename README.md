@@ -1,5 +1,8 @@
 # Flyedge Go SDK
 
+For a handler and tool example with history, concurrency and canonical mocks,
+see the [scenario integration guide](docs/SCENARIO_INTEGRATION.md).
+
 **Govern AI agents at the edge, where model requests, tool calls, and data cross
 application boundaries.**
 

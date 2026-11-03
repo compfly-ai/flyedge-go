@@ -1,5 +1,8 @@
 # Remote support agent
 
+For a handler and tool example with history, concurrency and canonical mocks,
+see the [scenario integration guide](../../docs/SCENARIO_INTEGRATION.md).
+
 An explicit, outbound-only FlyEdge connection lets Playground and simulations invoke
 this handler without a public listener or tunnel. This deterministic example uses
 one read-only `lookup_order` fixture and real SDK policy checks and telemetry.

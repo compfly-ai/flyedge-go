@@ -1,5 +1,8 @@
 # Canonical scenario hooks
 
+For a handler and tool example with history, concurrency and canonical mocks,
+see the [scenario integration guide](SCENARIO_INTEGRATION.md).
+
 The SDK accepts scoped canonical plans in simulation configuration under
 `extra.scenario_overrides`. It emits ready and completion snapshots for reverse
 invocations, correlated to the run, session and exact installed plan. A cancelled,
