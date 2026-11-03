@@ -20,7 +20,7 @@ func (g *Guard) BeforeScenarioTool(ctx context.Context, session, tool string, ar
 		return nil, false, err
 	}
 	if scope, ok := ctx.Value(invocationContextKey{}).(invocationScope); ok {
-		if scope.runID != g.simCtl.RunID() || session != sessionFromContext(ctx) {
+		if (!g.simCtl.HasExecution(session) && scope.runID != g.simCtl.RunID()) || session != sessionFromContext(ctx) {
 			return nil, false, fmt.Errorf("scenario mock run mismatch")
 		}
 		allowMock = allowMock && scope.allowInjection

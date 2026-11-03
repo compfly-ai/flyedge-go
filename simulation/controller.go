@@ -37,9 +37,10 @@ const profileMinInterval = 5 * time.Second
 // SimulationConfigHandler, adapted to Go's explicit interception model (no middleware
 // orchestrator — the Guard's own seams call Record).
 type Controller struct {
-	framework string
-	lifecycle sync.Mutex
-	mocks     scenarioMocks
+	framework  string
+	lifecycle  sync.Mutex
+	mocks      scenarioMocks
+	executions map[string]*scenarioMocks
 
 	mu           sync.Mutex
 	state        State

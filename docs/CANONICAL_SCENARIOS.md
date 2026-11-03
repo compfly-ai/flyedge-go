@@ -41,3 +41,19 @@ input uses the existing invocation state contract; semantic grading belongs to
 the platform runner.
 
 Limits: 256 KiB plan, 64 rules, 1,024 evidence events and 4 MiB evidence per plan.
+
+## Concurrent reverse invocations
+
+`InvocationOptions.MaxConcurrentInvocations` defaults to 1 (zero selects that
+same default) and accepts 1–64. Opt in only when the handler and its dependencies
+support concurrent calls. The SDK starts bounded goroutines; developers do not
+need to start a goroutine around the handler themselves. Calls sharing a session
+cannot overlap. Cancellation targets one invocation and its slot remains occupied
+until the handler returns; handlers must honor their context.
+
+The connection advertises `scenario_execution_version: 2`. A `scenario_plan`
+arriving on an authorized invocation is installed privately for its session;
+mock counters and evidence are not stored in the agent-wide simulation plan.
+Completion carries `scenario_snapshot` with `handler_success`. Mock permission
+still requires `AllowSimulationInjection` and the application's tool hook opt-in.
+Platform scheduling must negotiate this capability before sending inline plans.

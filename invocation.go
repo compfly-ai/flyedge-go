@@ -50,6 +50,7 @@ type InvocationMessage struct {
 	ToolCallID string               `json:"toolCallId,omitempty"`
 }
 type InvocationRequest struct {
+	ScenarioPlan json.RawMessage `json:"scenario_plan,omitempty"`
 	// History is a caller-provided test fixture, separate from live Messages.
 	// The handler owns applying it; nil is absent, pointer to empty is explicit empty.
 	History         *[]InvocationMessage `json:"history,omitempty"`
@@ -68,6 +69,8 @@ type InvocationRequest struct {
 // InvocationOptions grants only the listed purposes for this serving session.
 // The handler runs with the application's real credentials. This is not a sandbox.
 type InvocationOptions struct {
+	// MaxConcurrentInvocations explicitly opts into parallel handlers; zero defaults to one.
+	MaxConcurrentInvocations int `json:"max_concurrent_invocations"`
 	// AllowClientHistory opts in to test history; defaults to false.
 	AllowClientHistory bool `json:"allow_client_history"`
 	// Contract is published by the platform before this connection can serve.
@@ -90,6 +93,12 @@ type InvocationOptions struct {
 }
 
 func (o InvocationOptions) validate() (InvocationOptions, error) {
+	if o.MaxConcurrentInvocations == 0 {
+		o.MaxConcurrentInvocations = 1
+	}
+	if o.MaxConcurrentInvocations < 1 || o.MaxConcurrentInvocations > 64 {
+		return o, errors.New("flyedge: invocation concurrency must be 1–64")
+	}
 	var err error
 	o.Contract, err = snapshotInvocationContract(o.Contract)
 	if err != nil {
@@ -136,12 +145,13 @@ type InvocationWriter interface {
 type InvocationHandler func(context.Context, InvocationRequest, InvocationWriter) error
 
 type invocationFrame struct {
-	Type      string             `json:"type"`
-	ExpiresAt time.Time          `json:"expires_at,omitempty"`
-	ID        string             `json:"id,omitempty"`
-	Request   *InvocationRequest `json:"request,omitempty"`
-	Text      string             `json:"text,omitempty"`
-	Error     string             `json:"error,omitempty"`
+	ScenarioSnapshot map[string]any     `json:"scenario_snapshot,omitempty"`
+	Type             string             `json:"type"`
+	ExpiresAt        time.Time          `json:"expires_at,omitempty"`
+	ID               string             `json:"id,omitempty"`
+	Request          *InvocationRequest `json:"request,omitempty"`
+	Text             string             `json:"text,omitempty"`
+	Error            string             `json:"error,omitempty"`
 }
 type InvocationConnection struct {
 	ContractVersion string
@@ -170,7 +180,7 @@ func (c *InvocationConnection) Close() error { c.cancel(); _ = c.ws.CloseNow(); 
 
 // ServeInvocations explicitly registers ONE handler and opens an outbound socket.
 // Ordinary New/Connect never call it. Leases renew by default until canceled or revoked.
-// V1 serves one invocation at a time and
+// Handlers run up to MaxConcurrentInvocations at a time. The connection
 // deliberately does not reconnect/replay after disconnect; call again explicitly
 // for a new serving session. Platform revocation is terminal for this lease.
 func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, handler InvocationHandler) (*InvocationConnection, error) {
@@ -191,10 +201,11 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 	}
 	body, _ := json.Marshal(struct {
 		InvocationOptions
-		Nonce                string `json:"nonce"`
-		LeaseDurationSeconds int64  `json:"lease_duration_seconds"`
-		TimeoutSeconds       int64  `json:"timeout_seconds"`
-	}{opts, randID(), int64(opts.LeaseDuration / time.Second), int64(opts.RequestTimeout / time.Second)})
+		ScenarioExecutionVersion int    `json:"scenario_execution_version"`
+		Nonce                    string `json:"nonce"`
+		LeaseDurationSeconds     int64  `json:"lease_duration_seconds"`
+		TimeoutSeconds           int64  `json:"timeout_seconds"`
+	}{opts, 2, randID(), int64(opts.LeaseDuration / time.Second), int64(opts.RequestTimeout / time.Second)})
 	registration, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.cfg.APIURL, "/")+"/v1/flyedge/invocations", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -331,11 +342,12 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 	defer c.cancel()
 	defer c.ws.CloseNow()
 	type result struct {
-		id  string
-		err error
-		out *invocationOutput
+		snapshot map[string]any
+		id       string
+		err      error
+		out      *invocationOutput
 	}
-	results := make(chan result, 1)
+	results := make(chan result, o.MaxConcurrentInvocations)
 	frames := make(chan invocationFrame)
 	readErr := make(chan error, 1)
 	heartbeatErr := make(chan error, 1)
@@ -356,8 +368,12 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 			}
 		}
 	}()
-	var active string
-	var cancelWork context.CancelFunc
+	type activeWork struct {
+		cancel  context.CancelFunc
+		session string
+	}
+	active := map[string]activeWork{}
+	sessions := map[string]bool{}
 	seen := map[string]time.Time{}
 	expiry := time.NewTimer(time.Until(c.ExpiresAt()))
 	defer expiry.Stop()
@@ -369,8 +385,8 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 	}
 	pendingRenewal := ""
 	defer func() {
-		if cancelWork != nil {
-			cancelWork()
+		for _, work := range active {
+			work.cancel()
 		}
 	}()
 	for {
@@ -406,11 +422,12 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 			r.out.mu.Lock()
 			r.out.closed = true
 			r.out.mu.Unlock()
-			if cancelWork != nil {
-				cancelWork()
+			if work, ok := active[r.id]; ok {
+				work.cancel()
+				delete(sessions, work.session)
+				delete(active, r.id)
 			}
-			active = ""
-			f := invocationFrame{Type: "completed", ID: r.id}
+			f := invocationFrame{Type: "completed", ID: r.id, ScenarioSnapshot: r.snapshot}
 			if r.err != nil {
 				f.Type = "failed"
 				f.Error = r.err.Error()
@@ -440,8 +457,8 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				c.err = ErrConnectionRevoked
 				return
 			case "cancel":
-				if f.ID == active && cancelWork != nil {
-					cancelWork()
+				if work, ok := active[f.ID]; ok {
+					work.cancel()
 				}
 			case "invoke":
 				if !time.Now().Before(c.ExpiresAt()) {
@@ -470,8 +487,10 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					reason = err.Error()
 				} else if _, duplicate := seen[r.ID]; duplicate {
 					reason = "duplicate invocation"
-				} else if active != "" {
+				} else if len(active) >= o.MaxConcurrentInvocations {
 					reason = "handler busy"
+				} else if sessions[r.SessionID] {
+					reason = "session busy"
 				} else if !r.Deadline.After(time.Now()) {
 					reason = "deadline expired"
 				}
@@ -508,14 +527,28 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					}
 					continue
 				}
+				if len(r.ScenarioPlan) > 0 {
+					if !o.AllowSimulationInjection || r.RunID == "" || !strings.HasPrefix(r.SessionID, "eval:"+r.RunID+":") || g.simCtl == nil {
+						reason = "scenario plan requires authorized simulation scope"
+					} else if err := g.simCtl.BeginExecution(r.SessionID, r.ScenarioPlan); err != nil {
+						reason = err.Error()
+					}
+					if reason != "" {
+						if c.send(c.ctx, invocationFrame{Type: "failed", ID: r.ID, Error: reason}) != nil {
+							c.err = ErrInvocationOutcomeUnknown
+							return
+						}
+						continue
+					}
+				}
 				seen[r.ID] = r.Deadline
 				deadline := r.Deadline
 				if limit := time.Now().Add(o.RequestTimeout); deadline.After(limit) {
 					deadline = limit
 				}
 				work, stop := context.WithDeadline(c.ctx, deadline)
-				cancelWork = stop
-				active = r.ID
+				active[r.ID] = activeWork{stop, r.SessionID}
+				sessions[r.SessionID] = true
 				work = ContextWithSession(work, r.SessionID)
 				work = context.WithValue(work, invocationContextKey{}, invocationScope{r.RunID, o.AllowSimulationInjection})
 				out := &invocationOutput{c: c, id: r.ID}
@@ -536,11 +569,17 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					if err == nil {
 						err = work.Err()
 					}
-					if g.simCtl != nil {
+					var snapshot map[string]any
+					if g.simCtl != nil && len(req.ScenarioPlan) > 0 {
+						snapshot = g.simCtl.EndExecution(req.SessionID)
+						if snapshot != nil {
+							snapshot["handler_success"] = err == nil
+						}
+					} else if g.simCtl != nil {
 						g.simCtl.FinishScenario(req.RunID, req.SessionID, planID, err == nil)
 					}
 					select {
-					case results <- result{req.ID, err, out}:
+					case results <- result{snapshot, req.ID, err, out}:
 					case <-c.ctx.Done():
 					}
 				}(*r)

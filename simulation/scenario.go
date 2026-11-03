@@ -261,6 +261,9 @@ func (c *Controller) ScenarioStatus() map[string]any {
 func (c *Controller) BeforeScenarioTool(session, tool string, args any, allowed bool) (json.RawMessage, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if m := c.executions[session]; m != nil {
+		return m.before(session, tool, args, allowed)
+	}
 	if c.state != StateActive {
 		return nil, false, nil
 	}
@@ -272,6 +275,10 @@ func (c *Controller) BeforeScenarioTool(session, tool string, args any, allowed 
 func (c *Controller) ObserveScenarioTool(session, event, tool string, detail map[string]any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if m := c.executions[session]; m != nil {
+		m.observe(session, event, tool, detail)
+		return
+	}
 	if c.state == StateActive {
 		c.mocks.observe(session, event, tool, detail)
 	}
@@ -312,4 +319,52 @@ func (c *Controller) scenarioSnapshotLocked(phase string, success bool) {
 	if err != nil || !c.tr.trySend(string(b)) {
 		c.mocks.err = "scenario snapshot delivery unavailable"
 	}
+}
+
+// BeginExecution installs an owned plan scoped to one invocation session.
+// The caller must authorize injection before calling this method.
+func (c *Controller) BeginExecution(session string, raw json.RawMessage) error {
+	m := &scenarioMocks{}
+	m.configure(raw)
+	if m.err != "" {
+		return fmt.Errorf("%s", m.err)
+	}
+	if m.plan == nil || session == "" || m.plan.Session != session {
+		return fmt.Errorf("scenario execution scope mismatch")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.executions[session] != nil {
+		return fmt.Errorf("scenario execution already active")
+	}
+	if len(c.executions) >= 64 {
+		return fmt.Errorf("scenario execution capacity exhausted")
+	}
+	if c.executions == nil {
+		c.executions = map[string]*scenarioMocks{}
+	}
+	c.executions[session] = m
+	return nil
+}
+
+// EndExecution removes the private plan and returns its owned final evidence.
+func (c *Controller) EndExecution(session string) map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := c.executions[session]
+	if m == nil {
+		return nil
+	}
+	delete(c.executions, session)
+	raw, _ := json.Marshal(m.status())
+	var owned map[string]any
+	_ = json.Unmarshal(raw, &owned)
+	return owned
+}
+
+// HasExecution reports whether a session owns an invocation-private plan.
+func (c *Controller) HasExecution(session string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.executions[session] != nil
 }

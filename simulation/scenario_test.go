@@ -231,3 +231,33 @@ func TestScenarioSnapshotQueueOverflow(t *testing.T) {
 		t.Fatal("lost snapshot not marked inconclusive")
 	}
 }
+
+func TestExecutionPlansArePrivate(t *testing.T) {
+	c := New("test")
+	plan := func(session, value string) json.RawMessage {
+		return json.RawMessage(`{"id":"p","session_id":"` + session + `","step_id":"s","overrides":[{"id":"r","tool":"read","occurrence":1,"arguments":{},"value":"` + value + `","required_matches":1}]}`)
+	}
+	for _, s := range []string{"a", "b"} {
+		if err := c.BeginExecution(s, plan(s, s)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.BeginExecution("a", plan("a", "bad")) == nil {
+		t.Fatal("duplicate accepted")
+	}
+	for _, s := range []string{"b", "a"} {
+		value, mocked, err := c.BeforeScenarioTool(s, "read", map[string]any{}, true)
+		if err != nil || !mocked || string(value) != `"`+s+`"` {
+			t.Fatalf("%s: %s %v %v", s, value, mocked, err)
+		}
+		if snapshot := c.EndExecution(s); snapshot["complete"] != true {
+			t.Fatal(snapshot)
+		}
+	}
+	if c.EndExecution("a") != nil {
+		t.Fatal("execution retained")
+	}
+	if c.BeginExecution("wrong", plan("a", "a")) == nil {
+		t.Fatal("scope mismatch accepted")
+	}
+}
