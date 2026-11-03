@@ -36,11 +36,29 @@ completion. Reapplying an unchanged plan does not reset its evidence.
 `ScenarioMockStatus` returns an owned evidence snapshot for diagnostics; it is not
 an evaluation verdict. The runner must receive the matching completion snapshot
 and evaluate the saved judges. The SDK supports before-tool return fixtures, not
-argument replacement, history/checkpoint restoration or semantic grading. State
+argument replacement, automatic framework checkpoint restoration or semantic
+grading. History fixtures are supported separately, as described below. State
 input uses the existing invocation state contract; semantic grading belongs to
 the platform runner.
 
 Limits: 256 KiB plan, 64 rules, 1,024 evidence events and 4 MiB evidence per plan.
+
+## Provide history fixtures
+
+Set `InvocationOptions.AllowClientHistory` to true to accept caller-provided
+history (the default is false). `InvocationRequest.History` is separate from live
+`Messages` and `State`. The SDK validates and transports the fixture; the handler
+must apply it to the agent's conversation without replacing its system policy.
+A nil `History` means absent; a pointer to an empty slice means explicitly empty.
+The handler owns applying that distinction to its conversation state.
+
+History supports user/assistant messages, assistant
+`toolCalls: [{id, name, arguments}]` with JSON object arguments, and `role: tool`
+responses with `toolCallId` and text `content`. Every tool call must be resolved
+before another conversational message. Supplied system roles are rejected.
+Map these records to the framework's message types as prior conversation context;
+do not execute the recorded tool calls again. This is history injection, not
+automatic restoration of framework memory or checkpoints.
 
 ## Concurrent reverse invocations
 
