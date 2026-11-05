@@ -104,7 +104,7 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		return t.roundTripResponses(req)
 	}
-	ex := extractorFor(req.URL.Host, req.URL.Path)
+	ex := extractorFor(req.URL.Hostname(), req.URL.Path)
 	if ex == nil || req.Body == nil {
 		return t.base.RoundTrip(req) // not a known LLM call — pass through
 	}
@@ -177,6 +177,14 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 // since already-streamed tokens can't be retracted.
 func (t *guardRoundTripper) inspectResponse(req *http.Request, resp *http.Response, session, model string) (*http.Response, error) {
 	host := req.URL.Host
+	// Vertex shares one host across publishers. Reuse each publisher's existing
+	// JSON and SSE parser after resolving its route.
+	switch vertexProvider(req.URL.Hostname(), req.URL.Path) {
+	case "gemini":
+		host = "generativelanguage.googleapis.com"
+	case "anthropic":
+		host = "api.anthropic.com"
+	}
 
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
 		ctx := WithVerdictRelay(req.Context(), "stream_delivered")
@@ -243,9 +251,47 @@ func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.
 // instructions or assistant/tool history.
 type extractor func(body []byte) (prompt, model string)
 
+// vertexProvider recognizes the same generation routes for global and regional
+// Vertex endpoints. Unsupported operations and publishers remain untouched.
+func vertexProvider(host, path string) string {
+	if host != "aiplatform.googleapis.com" && !strings.HasSuffix(host, "-aiplatform.googleapis.com") {
+		return ""
+	}
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(parts) < 5 || (parts[0] != "v1" && parts[0] != "v1beta1") {
+		return ""
+	}
+	tail := parts[len(parts)-4:]
+	if tail[0] != "publishers" || tail[2] != "models" {
+		return ""
+	}
+	i := strings.LastIndexByte(tail[3], ':')
+	if i <= 0 {
+		return ""
+	}
+	op := tail[3][i+1:]
+	switch {
+	case tail[1] == "google" && (op == "generateContent" || op == "streamGenerateContent"):
+		return "gemini"
+	case tail[1] == "anthropic" && (op == "rawPredict" || op == "streamRawPredict"):
+		return "anthropic"
+	default:
+		return ""
+	}
+}
+
 // extractorFor selects the provider extractor for a host+path, or nil if the host isn't a known
 // LLM provider (so unrelated traffic on the same client passes through untouched).
 func extractorFor(host, path string) extractor {
+	switch vertexProvider(host, path) {
+	case "gemini":
+		return func(body []byte) (string, string) { return extractGemini(body, path) }
+	case "anthropic":
+		return func(body []byte) (string, string) {
+			prompt, _ := extractAnthropic(body)
+			return prompt, geminiModelFromPath(path)
+		}
+	}
 	switch {
 	case strings.Contains(host, "anthropic.com") && strings.Contains(path, "/messages"):
 		return extractAnthropic

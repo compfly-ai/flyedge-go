@@ -74,6 +74,14 @@ merely observing it.
 See the [complete developer guide](docs/DEVELOPER_GUIDE_GO.md) for Anthropic, OpenAI,
 Gemini, langchaingo, tool-use loops, identity, telemetry, and production configuration.
 
+`WrapRoundTripper` also recognizes Google Vertex `generateContent` and
+`streamGenerateContent`, and Anthropic Vertex `rawPredict` and `streamRawPredict`,
+on global/regional `aiplatform.googleapis.com` endpoints (`v1` and `v1beta1`).
+With `Config.ProxyMode`, these calls use the existing signed gateway route and
+preserve gateway HTTP errors. In direct mode, non-streaming denials withhold the
+response; streamed output is audited after delivery. Other Vertex operations,
+such as embeddings and token counting, remain outside this transport wrapper.
+
 OpenAI Responses (`client.Responses.New`) is covered by the same wrapped HTTP
 transport, including function-call output and streaming audits. See
 [Responses coverage and limits](docs/RESPONSES.md), including partial conversation

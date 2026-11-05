@@ -2,6 +2,8 @@
 
 ## Unreleased — 0.8.0
 
+- Recognize Google and Anthropic Vertex generation routes in `WrapRoundTripper`, including URL-derived model IDs, signed proxy forwarding, and publisher-specific response/SSE inspection.
+
 - Add explicit canonical scenario tool mocks and separate requested, mocked and executed evidence, with scoped reverse-invocation completion snapshots. See [canonical scenario integration](docs/CANONICAL_SCENARIOS.md).
 - Preserve scenario evidence when simulation telemetry credentials renew.
 
