@@ -17,8 +17,12 @@ func ContextWithSession(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, sessionKey{}, id)
 }
 
-// sessionFromContext returns the explicit session id set via ContextWithSession, or "".
+// sessionFromContext returns the InboundHandler simulation session, else the explicit session id
+// set via ContextWithSession, or "".
 func sessionFromContext(ctx context.Context) string {
+	if id := inboundSessionFromContext(ctx); id != "" {
+		return id
+	}
 	id, _ := ctx.Value(sessionKey{}).(string)
 	return id
 }

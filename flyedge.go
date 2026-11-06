@@ -221,10 +221,13 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	if len(req.Content.Attachments) > 0 {
 		req.Content.Hash = ""
 	}
+	if session := inboundSessionFromContext(ctx); session != "" {
+		req.SessionID = session
+	}
 	// Default correlation ids once, so every gate — including the manual
 	// CheckToolCall/CheckToolResponse/CheckModelResponse helpers, not just the
 	// transport wrap — carries a request_id into /check and telemetry. SessionID
-	// stays the caller's to supply.
+	// stays the caller's to supply outside an InboundHandler simulation request.
 	if req.RequestID == "" {
 		req.RequestID = "req-" + randHex()
 	}
