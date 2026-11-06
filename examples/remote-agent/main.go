@@ -29,6 +29,7 @@ func main() {
 func run() error {
 	leaseDuration := flag.Duration("lease-duration", time.Hour, "renewable authorization window (1s–24h)")
 	autoRenew := flag.Bool("auto-renew", true, "renew the lease until stopped or revoked; false makes this a finite session")
+	operatorReconnect := flag.Bool("operator-reconnect", false, "accept operator-requested reconnect after the lease closes")
 	logFormat := flag.String("log-format", "pretty", "log format: pretty, text, or json")
 	color := flag.String("color", "auto", "terminal colors: auto, always, or never")
 	flag.Parse()
@@ -51,11 +52,12 @@ func run() error {
 	// This dedicated simulation example explicitly enables these capabilities.
 	// Ordinary SDK clients still opt in through InvocationOptions.
 	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{
-		Name:          "Remote support example",
-		Environment:   "dev",
-		Purposes:      []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval},
-		LeaseDuration: *leaseDuration,
-		AutoRenew:     autoRenew,
+		Name:                   "Remote support example",
+		Environment:            "dev",
+		Purposes:               []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval},
+		LeaseDuration:          *leaseDuration,
+		AutoRenew:              autoRenew,
+		AllowOperatorReconnect: *operatorReconnect,
 		Contract: &flyedge.InvocationContract{State: flyedge.StateContract{Fields: map[string]flyedge.StateField{
 			"current_page":      {Type: flyedge.StateString, PlaygroundDefault: json.RawMessage(`"order-details"`)},
 			"selected_order_id": {Type: flyedge.StateString, PlaygroundDefault: json.RawMessage(`"DEMO-42"`)},

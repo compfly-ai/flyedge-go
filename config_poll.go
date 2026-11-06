@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -43,14 +44,15 @@ type SimulationConfig struct {
 // flyedgeConfigResponse is the GET /v1/flyedge/config body. All fields are optional (prism omits
 // them when null).
 type flyedgeConfigResponse struct {
-	AgentSettingsRevision    *uint64           `json:"agent_settings_revision,omitempty"`
-	AgentSettings            map[string]any    `json:"agent_settings,omitempty"`
-	AgentSlug                string            `json:"agent_slug,omitempty"`
-	NamespaceID              string            `json:"namespace_id,omitempty"`
-	Simulation               *SimulationConfig `json:"simulation,omitempty"`
-	ManifestRefreshRequired  *bool             `json:"manifest_refresh_required,omitempty"`
-	HeartbeatIntervalSeconds *uint32           `json:"heartbeat_interval_seconds,omitempty"`
-	ModelMode                *string           `json:"model_mode,omitempty"`
+	InvocationReconnectRequests map[string]string `json:"invocation_reconnect_requests,omitempty"`
+	AgentSettingsRevision       *uint64           `json:"agent_settings_revision,omitempty"`
+	AgentSettings               map[string]any    `json:"agent_settings,omitempty"`
+	AgentSlug                   string            `json:"agent_slug,omitempty"`
+	NamespaceID                 string            `json:"namespace_id,omitempty"`
+	Simulation                  *SimulationConfig `json:"simulation,omitempty"`
+	ManifestRefreshRequired     *bool             `json:"manifest_refresh_required,omitempty"`
+	HeartbeatIntervalSeconds    *uint32           `json:"heartbeat_interval_seconds,omitempty"`
+	ModelMode                   *string           `json:"model_mode,omitempty"`
 }
 
 // connectResponse is the POST /v1/flyedge/connect body: the heartbeat cadence + initial model mode.
@@ -137,7 +139,11 @@ func (g *Guard) startConfigPoll() {
 func (g *Guard) pollOnce(getter signedGetter) {
 	ctx, cancel := context.WithTimeout(context.Background(), g.cfg.Timeout)
 	defer cancel()
-	raw, err := getter.GetSigned(ctx, configPath, g.heartbeatHeaders())
+	headers := g.heartbeatHeaders()
+	if environments := g.invocationReconnectEnvironments(); environments != "" {
+		headers["X-Invocation-Reconnect-Environments"] = environments
+	}
+	raw, err := getter.GetSigned(ctx, configPath, headers)
 	if err != nil {
 		return
 	}
@@ -209,6 +215,35 @@ func (g *Guard) applyConfig(cr flyedgeConfigResponse) {
 		} else {
 			_ = g.reconnect(context.Background())
 		}
+	}
+	g.deliverInvocationReconnectRequests(cr.InvocationReconnectRequests)
+}
+
+func (g *Guard) invocationReconnectEnvironments() string {
+	g.invocationMu.Lock()
+	defer g.invocationMu.Unlock()
+	var environments []string
+	for _, c := range g.invocations {
+		if c.reconnect != nil {
+			environments = append(environments, c.environment)
+		}
+	}
+	return strings.Join(environments, ",")
+}
+
+func (g *Guard) deliverInvocationReconnectRequests(requests map[string]string) {
+	g.invocationMu.Lock()
+	defer g.invocationMu.Unlock()
+	for _, c := range g.invocations {
+		if c.reconnect == nil {
+			continue
+		}
+		// Keep only the latest heartbeat's request, including withdrawal.
+		select {
+		case <-c.reconnect:
+		default:
+		}
+		c.reconnect <- requests[c.environment]
 	}
 }
 

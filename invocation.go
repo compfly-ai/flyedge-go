@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -87,6 +88,8 @@ type InvocationOptions struct {
 	RequestTimeout time.Duration `json:"-"`
 	// AllowInsecureLoopback permits HTTP only to a literal loopback address for local tests.
 	AllowInsecureLoopback bool `json:"-"`
+	// AllowOperatorReconnect lets a platform operator request a fresh lease after a disconnect.
+	AllowOperatorReconnect bool `json:"-"`
 	// AllowSimulationInjection defaults to true when nil for reverse invocation.
 	// Set a pointer to false to reject injected mocks.
 	AllowSimulationInjection *bool `json:"allow_simulation_injection"`
@@ -133,6 +136,7 @@ func (o InvocationOptions) validate() (InvocationOptions, error) {
 			return o, fmt.Errorf("flyedge: invalid invocation purpose %q", p)
 		}
 	}
+	o.Purposes = slices.Clone(o.Purposes)
 	if o.RequestTimeout == 0 {
 		o.RequestTimeout = 2 * time.Minute
 	}
@@ -158,20 +162,51 @@ type invocationFrame struct {
 	Text             string             `json:"text,omitempty"`
 	Error            string             `json:"error,omitempty"`
 }
+
+// InvocationConnection represents a serving session. ID and ContractVersion describe
+// its initial lease. Use ActiveLeaseID to identify the currently connected lease.
 type InvocationConnection struct {
 	ContractVersion string
 	ID              string
+	environment     string
+	reconnect       chan string
+	cancel          context.CancelFunc
+	done            chan struct{}
+	err             error // published before done closes
+	mu              sync.RWMutex
+	lease           *invocationLease
+	connected       bool
+}
+
+type invocationLease struct {
+	contractVersion string
+	id              string
 	expiresAt       time.Time
 	leaseMu         sync.RWMutex
 	ws              *websocket.Conn
 	ctx             context.Context
 	cancel          context.CancelFunc
-	done            chan struct{}
-	err             error // published before done closes
+	err             error
 }
 
 // ExpiresAt returns the latest acknowledged lease expiry. Automatic renewal advances it.
 func (c *InvocationConnection) ExpiresAt() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lease.ExpiresAt()
+}
+
+// ActiveLeaseID returns the current lease ID, or an empty string when disconnected.
+func (c *InvocationConnection) ActiveLeaseID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.connected {
+		return ""
+	}
+	return c.lease.id
+}
+
+func (c *invocationLease) ExpiresAt() time.Time {
 	c.leaseMu.RLock()
 	defer c.leaseMu.RUnlock()
 	return c.expiresAt
@@ -181,13 +216,13 @@ func (c *InvocationConnection) Wait() error { <-c.done; return c.err }
 
 // Close stops accepting work and signals cancellation. It does not wait for an
 // uncooperative handler or undo its external side effects.
-func (c *InvocationConnection) Close() error { c.cancel(); _ = c.ws.CloseNow(); <-c.done; return nil }
+func (c *InvocationConnection) Close() error { c.cancel(); <-c.done; return nil }
 
 // ServeInvocations explicitly registers ONE handler and opens an outbound socket.
 // Ordinary New/Connect never call it. Leases renew by default until canceled or revoked.
-// Handlers run up to MaxConcurrentInvocations at a time. The connection
-// deliberately does not reconnect/replay after disconnect; call again explicitly
-// for a new serving session. Platform revocation is terminal for this lease.
+// Handlers run up to MaxConcurrentInvocations at a time. A disconnect ends the
+// session unless AllowOperatorReconnect is set. With opt-in, a platform operator
+// can request a new lease until the caller closes or cancels the session.
 func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, handler InvocationHandler) (*InvocationConnection, error) {
 	opts, err := opts.validate()
 	if err != nil {
@@ -196,6 +231,102 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 	if handler == nil || g.signer == nil {
 		return nil, errors.New("flyedge: remote invocation requires a handler and DID signing identity")
 	}
+	if _, ok := g.enforcer.(signedGetter); opts.AllowOperatorReconnect && !ok {
+		return nil, errors.New("flyedge: operator reconnect requires signed config heartbeats")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	lease, err := g.openInvocation(ctx, opts, "")
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	c := &InvocationConnection{
+		ContractVersion: lease.contractVersion, ID: lease.id, environment: opts.Environment,
+		lease: lease, connected: true, cancel: cancel, done: make(chan struct{}),
+	}
+	if opts.AllowOperatorReconnect {
+		c.reconnect = make(chan string, 1)
+	}
+	if err := g.trackInvocation(c); err != nil {
+		cancel()
+		_ = lease.ws.CloseNow()
+		return nil, err
+	}
+	go c.serve(ctx, g, opts, handler)
+	return c, nil
+}
+
+func (g *Guard) trackInvocation(c *InvocationConnection) error {
+	g.invocationMu.Lock()
+	defer g.invocationMu.Unlock()
+	if g.invocationClosed {
+		return errors.New("flyedge: guard closed")
+	}
+	if c.reconnect != nil {
+		count := 0
+		for _, other := range g.invocations {
+			if other.reconnect == nil {
+				continue
+			}
+			if other.environment == c.environment {
+				return errors.New("flyedge: operator reconnect is already enabled for this environment")
+			}
+			count++
+		}
+		if count == 8 {
+			return errors.New("flyedge: operator reconnect supports at most eight environments per guard")
+		}
+		g.startConfigPoll()
+	}
+	g.invocations = append(g.invocations, c)
+	return nil
+}
+
+func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts InvocationOptions, handler InvocationHandler) {
+	defer close(c.done)
+	defer c.cancel()
+	defer func() {
+		g.invocationMu.Lock()
+		g.invocations = slices.DeleteFunc(g.invocations, func(other *InvocationConnection) bool { return other == c })
+		g.invocationMu.Unlock()
+	}()
+
+	lease := c.lease
+	lastAttempt := ""
+	for {
+		if lease != nil {
+			lease.serve(g, opts, handler)
+			c.mu.Lock()
+			c.connected = false
+			c.mu.Unlock()
+			if c.reconnect == nil {
+				c.err = lease.err
+				return
+			}
+			lease = nil
+		}
+
+		select {
+		case <-ctx.Done():
+			c.err = ctx.Err()
+			return
+		case request := <-c.reconnect:
+			if request == "" || request == lastAttempt || ctx.Err() != nil {
+				continue
+			}
+			lastAttempt = request
+			next, err := g.openInvocation(ctx, opts, request)
+			if err == nil {
+				lease = next
+				c.mu.Lock()
+				c.lease, c.connected = lease, true
+				c.mu.Unlock()
+			}
+		}
+	}
+}
+
+func (g *Guard) openInvocation(ctx context.Context, opts InvocationOptions, reconnectRequestID string) (*invocationLease, error) {
 	base, err := url.Parse(g.cfg.APIURL)
 	if err != nil {
 		return nil, err
@@ -204,13 +335,20 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 	if base.User != nil || base.RawQuery != "" || base.Fragment != "" || (base.Scheme != "https" && !(opts.AllowInsecureLoopback && base.Scheme == "http" && ip != nil && ip.IsLoopback())) {
 		return nil, errors.New("flyedge: invocation requires HTTPS (or explicitly allowed literal loopback HTTP)")
 	}
-	body, _ := json.Marshal(struct {
+	body, err := json.Marshal(struct {
 		InvocationOptions
+		ReconnectRequestID       string `json:"reconnect_request_id,omitempty"`
 		ScenarioExecutionVersion int    `json:"scenario_execution_version"`
 		Nonce                    string `json:"nonce"`
 		LeaseDurationSeconds     int64  `json:"lease_duration_seconds"`
 		TimeoutSeconds           int64  `json:"timeout_seconds"`
-	}{opts, 2, randID(), int64(opts.LeaseDuration / time.Second), int64(opts.RequestTimeout / time.Second)})
+	}{
+		InvocationOptions: opts, ReconnectRequestID: reconnectRequestID, ScenarioExecutionVersion: 2,
+		Nonce: randID(), LeaseDurationSeconds: int64(opts.LeaseDuration / time.Second), TimeoutSeconds: int64(opts.RequestTimeout / time.Second),
+	})
+	if err != nil {
+		return nil, err
+	}
 	registration, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.cfg.APIURL, "/")+"/v1/flyedge/invocations", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -278,23 +416,12 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 		_ = ws.CloseNow()
 		return nil, errors.New("flyedge: invocation connection did not become ready")
 	}
-	c := &InvocationConnection{ContractVersion: lease.ContractVersion, ID: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel, done: make(chan struct{})}
-	g.invocationMu.Lock()
-	if g.invocationClosed {
-		g.invocationMu.Unlock()
-		cancel()
-		_ = ws.CloseNow()
-		return nil, errors.New("flyedge: guard closed")
-	}
-	g.invocations = append(g.invocations, c)
-	g.invocationMu.Unlock()
-	go c.serve(g, opts, handler)
-	return c, nil
+	return &invocationLease{contractVersion: lease.ContractVersion, id: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel}, nil
 }
 
 type invocationOutput struct {
 	mu     sync.Mutex
-	c      *InvocationConnection
+	c      *invocationLease
 	id     string
 	closed bool
 	size   int
@@ -312,7 +439,7 @@ func (w *invocationOutput) TextDelta(ctx context.Context, text string) error {
 	w.size += len(text)
 	return w.c.send(ctx, invocationFrame{Type: "delta", ID: w.id, Text: text})
 }
-func (c *InvocationConnection) send(ctx context.Context, f invocationFrame) error {
+func (c *invocationLease) send(ctx context.Context, f invocationFrame) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return wsjson.Write(ctx, c.ws, f)
@@ -342,8 +469,7 @@ func invocationHeartbeat(ctx context.Context, ws *websocket.Conn, interval, time
 	}
 }
 
-func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h InvocationHandler) {
-	defer close(c.done)
+func (c *invocationLease) serve(g *Guard, o InvocationOptions, h InvocationHandler) {
 	defer c.cancel()
 	defer c.ws.CloseNow()
 	type result struct {
@@ -484,7 +610,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				}
 				if !permitted {
 					reason = "purpose not authorized"
-				} else if c.ContractVersion != "" && r.ContractVersion != c.ContractVersion {
+				} else if c.contractVersion != "" && r.ContractVersion != c.contractVersion {
 					reason = "invocation contract version mismatch"
 				} else if r.State != nil && !*o.AllowClientState {
 					reason = "client state not authorized"

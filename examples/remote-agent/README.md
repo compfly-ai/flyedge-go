@@ -56,10 +56,12 @@ local renewal testing. `connection.ExpiresAt()` returns the latest acknowledged
 lease expiry. The UI labels it as the current lease expiry, not a shutdown time,
 when automatic renewal is enabled.
 
-Renewal requires broker acknowledgement and cannot recreate a revoked/expired
-lease. A lost connection or a lease that cannot be renewed still ends serving;
-there is no automatic reconnect or invocation replay in this version. Changing
-flags/config requires restarting the example; configuration is not hot-reloaded.
+Renewal requires broker acknowledgement. Run with `-operator-reconnect` to keep
+the handler available for an authorized operator to reconnect from the agent
+summary after a disconnect, expiry, or revocation. The next signed config
+heartbeat carries the request and the SDK registers a fresh lease. This flag
+requires a Platform deployment that supports operator reconnect. The SDK
+never reconnects automatically or replays an invocation.
 
 Register a dedicated agent and generate its DID identity through Platform. Set:
 
@@ -87,9 +89,9 @@ already exist in the evaluation catalog; this API does not create identities.
 
 V1 supports one serving connection per agent/environment and one invocation at a time.
 SDK output streams over the socket; the Platform adapter buffers the final response.
-Disconnects are terminal with potentially unknown in-flight outcomes: no automatic
-reconnect, retry or replay. Restart explicitly to authorize a new session. Platform
-can revoke the lease; closing the Guard also closes the connection. Cancellation is
+Disconnects can leave in-flight outcomes unknown. With the default flags, restart
+explicitly to authorize a new session. Platform can revoke the lease; closing
+the Guard ends serving and disables operator reconnect. Cancellation is
 cooperative and cannot undo side effects. Acting-principal delegation is not supported.
 
 The caller supplies the handler to `Guard.ServeInvocations`; importing the SDK,
