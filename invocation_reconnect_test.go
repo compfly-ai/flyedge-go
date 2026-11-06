@@ -149,6 +149,11 @@ func TestOperatorReconnectUsesScopedHeartbeatAndFreshLease(t *testing.T) {
 	if registrations.Load() != 1 {
 		t.Fatal("revocation triggered automatic reconnect")
 	}
+	if _, err := guard.ServeInvocations(ctx, options, func(context.Context, InvocationRequest, InvocationWriter) error {
+		return nil
+	}); err == nil || registrations.Load() != 1 {
+		t.Fatal("a second serving session attempted to register for the same environment")
+	}
 	signal.Store(true)
 	for _, event := range []<-chan struct{}{second, completed} {
 		select {

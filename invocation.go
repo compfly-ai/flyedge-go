@@ -170,6 +170,7 @@ type InvocationConnection struct {
 	ID              string
 	environment     string
 	reconnect       chan string
+	registered      bool // protected by Guard.invocationMu
 	cancel          context.CancelFunc
 	done            chan struct{}
 	err             error // published before done closes
@@ -235,23 +236,35 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 		return nil, errors.New("flyedge: operator reconnect requires signed config heartbeats")
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	lease, err := g.openInvocation(ctx, opts, "")
-	if err != nil {
-		cancel()
-		return nil, err
-	}
 	c := &InvocationConnection{
-		ContractVersion: lease.contractVersion, ID: lease.id, environment: opts.Environment,
-		lease: lease, connected: true, cancel: cancel, done: make(chan struct{}),
+		environment: opts.Environment, cancel: cancel, done: make(chan struct{}),
 	}
 	if opts.AllowOperatorReconnect {
 		c.reconnect = make(chan string, 1)
 	}
 	if err := g.trackInvocation(c); err != nil {
 		cancel()
-		_ = lease.ws.CloseNow()
 		return nil, err
 	}
+	lease, err := g.openInvocation(ctx, opts, "")
+	if err != nil {
+		c.finish(g)
+		return nil, err
+	}
+	g.invocationMu.Lock()
+	if g.invocationClosed {
+		g.invocationMu.Unlock()
+		_ = lease.ws.CloseNow()
+		c.finish(g)
+		return nil, errors.New("flyedge: guard closed")
+	}
+	c.ContractVersion, c.ID = lease.contractVersion, lease.id
+	c.lease, c.connected = lease, true
+	c.registered = true
+	if c.reconnect != nil {
+		g.startConfigPoll()
+	}
+	g.invocationMu.Unlock()
 	go c.serve(ctx, g, opts, handler)
 	return c, nil
 }
@@ -276,21 +289,21 @@ func (g *Guard) trackInvocation(c *InvocationConnection) error {
 		if count == 8 {
 			return errors.New("flyedge: operator reconnect supports at most eight environments per guard")
 		}
-		g.startConfigPoll()
 	}
 	g.invocations = append(g.invocations, c)
 	return nil
 }
 
-func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts InvocationOptions, handler InvocationHandler) {
-	defer close(c.done)
-	defer c.cancel()
-	defer func() {
-		g.invocationMu.Lock()
-		g.invocations = slices.DeleteFunc(g.invocations, func(other *InvocationConnection) bool { return other == c })
-		g.invocationMu.Unlock()
-	}()
+func (c *InvocationConnection) finish(g *Guard) {
+	c.cancel()
+	g.invocationMu.Lock()
+	g.invocations = slices.DeleteFunc(g.invocations, func(other *InvocationConnection) bool { return other == c })
+	g.invocationMu.Unlock()
+	close(c.done)
+}
 
+func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts InvocationOptions, handler InvocationHandler) {
+	defer c.finish(g)
 	lease := c.lease
 	lastAttempt := ""
 	for {

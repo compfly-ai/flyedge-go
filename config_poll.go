@@ -224,7 +224,7 @@ func (g *Guard) invocationReconnectEnvironments() string {
 	defer g.invocationMu.Unlock()
 	var environments []string
 	for _, c := range g.invocations {
-		if c.reconnect != nil {
+		if c.registered && c.reconnect != nil {
 			environments = append(environments, c.environment)
 		}
 	}
@@ -235,7 +235,7 @@ func (g *Guard) deliverInvocationReconnectRequests(requests map[string]string) {
 	g.invocationMu.Lock()
 	defer g.invocationMu.Unlock()
 	for _, c := range g.invocations {
-		if c.reconnect == nil {
+		if !c.registered || c.reconnect == nil {
 			continue
 		}
 		// Keep only the latest heartbeat's request, including withdrawal.
