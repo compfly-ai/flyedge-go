@@ -44,6 +44,10 @@ jobs:
       - run: go vet ./...
       - run: go test ./... -count=1
 
+      - name: Langchaingo module tests
+        working-directory: langchaingo
+        run: go test ./... -count=1
+
       - name: Nested modules build
         run: |
           for m in telemetry/otel langchaingo examples; do
