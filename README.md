@@ -155,6 +155,7 @@ another path. Kill switches surface separately as `*KillSwitchError`.
 | `identity` | DID + Ed25519 request signing |
 | `telemetry` | telemetry sinks and the protection report |
 | `telemetry/otel` | OpenTelemetry sink (separate module) |
+| `langchaingo` | Reverse-invocation conversation to langchaingo messages (separate module) |
 | `simulation` | simulation client and attack injection |
 
 ## Examples

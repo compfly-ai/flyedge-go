@@ -63,6 +63,11 @@ Map these records to the framework's message types as prior conversation context
 do not execute the recorded tool calls again. This is history injection, not
 automatic restoration of framework memory or checkpoints.
 
+For langchaingo, the separate `github.com/compfly-ai/flyedge-go/langchaingo` module
+does this mapping. `Messages(request)` returns `History` followed by `Messages` as
+`[]llms.MessageContent` for `GenerateContent`. Pass the whole conversation, not only
+the latest user message, or follow-up turns lose their context.
+
 ## Concurrent reverse invocations
 
 `InvocationOptions.MaxConcurrentInvocations` defaults to 1 (zero selects that
