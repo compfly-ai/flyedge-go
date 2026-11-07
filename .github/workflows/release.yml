@@ -46,7 +46,7 @@ jobs:
 
       - name: Nested modules build
         run: |
-          for m in telemetry/otel examples; do
+          for m in telemetry/otel langchaingo examples; do
             echo "--- $m"
             (cd "$m" && go build ./...)
           done

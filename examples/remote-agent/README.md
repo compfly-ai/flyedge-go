@@ -44,7 +44,7 @@ continue to identify individual work independently of the connection.
 ```go
 options := flyedge.InvocationOptions{
     Environment: "dev",
-    Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground},
+    Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation},
     // LeaseDuration: time.Hour, // default; range 1s–24h
     // AutoRenew: nil,           // default: true
 }
