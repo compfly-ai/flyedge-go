@@ -15,7 +15,7 @@ and imports for `context`, `encoding/json`, and `github.com/compfly-ai/flyedge-g
 allowInjection := true // Deployment setting, never supplied by a prompt.
 opts := flyedge.InvocationOptions{
     Name: "My agent", Environment: "dev",
-    Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeEval},
+    Purposes: []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval},
     MaxConcurrentInvocations: 8, // Set to 1 (or omit) for sequential handlers.
     AllowClientHistory: true,
     AllowSimulationInjection: &allowInjection,
@@ -42,6 +42,16 @@ if err != nil { return err }
 defer conn.Close()
 return conn.Wait()
 ```
+
+Grant `PurposeSimulation` for Experiments (evals and simulations) and
+`PurposePlayground` for Playground. Experiments look for a connection that grants
+simulation; without it they fall back to the agent's HTTP endpoint, if one is
+registered, or fail.
+
+The handler's `ctx` carries the platform's session (`req.SessionID`). Pass that
+`ctx` to your agent, or pass `req.SessionID` into your own session handling;
+replacing it with an application-generated ID detaches the run's traces from the
+experiment.
 
 Concurrency accepts 1–64, using the same dispatch loop for every setting. Different
 sessions can overlap; the same session cannot. The SDK rejects excess arrivals as
