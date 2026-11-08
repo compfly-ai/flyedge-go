@@ -259,13 +259,14 @@ selects the local or hosted deployment.
 | `InvocationOptions.Purposes` | Explicitly permits `PurposePlayground`, `PurposeSimulation`, and/or `PurposeEval`. |
 | `LeaseDuration` | Renewable authorization window, default one hour; accepted range 1 second–24 hours. |
 | `AutoRenew` | `*bool`, default true when nil. A pointer to false creates a finite lease. Renewal keeps the same connection alive until stopped or revoked. |
+| `AllowOperatorReconnect` | Defaults to false. Allows an authorized Platform operator to request a fresh lease through the signed config heartbeat after the socket closes. Requires a compatible Platform deployment. |
 | `AllowClientState` | `*bool`, default true when nil. A pointer to false rejects state. A declared state contract requires it to be enabled. |
 | `Contract.State` | Declares `Fields` and optional `Required` names. Types: `StateString`, `StateNumber`, `StateBoolean`, `StateJSON`. No state defaults are injected. |
 | `AllowSimulationInjection` | Default false. Explicitly allows simulation mutation hooks; unprotected baseline execution is not supported. |
 | `RequestTimeout` | Invocation timeout, default two minutes; accepted range 1 second–10 minutes. |
 | `InvocationRequest` | Contains `ID`, `Purpose`, `Messages`, `SessionID`, `RunID`, `Deadline`, optional `State`, and `ContractVersion`. |
 | `InvocationWriter.TextDelta` | Sends a text chunk immediately over the reverse WebSocket. The current platform broker collects chunks before returning the full response to Playground. |
-| `InvocationConnection` | Exposes the lease `ID`, pinned `ContractVersion`, `ExpiresAt()`, `Close()`, and blocking `Wait()`. |
+| `InvocationConnection` | Exposes the initial lease `ID` and `ContractVersion`, the current `ActiveLeaseID()`, `ExpiresAt()`, `Close()`, and blocking `Wait()`. |
 
 `State` is `map[string]json.RawMessage`: nil means no state was supplied; a non-nil
 empty map means explicit empty state. A dataset scenario supplies its own literal
@@ -278,10 +279,12 @@ layer runs. New evaluations do not select run-wide state profiles or substitute
 tokens inside state.
 
 The handler context is canceled on timeout, shutdown, or revocation. Returning an
-error fails that invocation. `Wait()` reports `ErrConnectionRevoked`,
-`ErrConnectionExpired`, or `ErrInvocationOutcomeUnknown` when appropriate. Lost
-connections do not automatically reconnect or replay in-flight work. Platform
-revocation is terminal; renewing the lease cannot undo it. Cancellation is
+error fails that invocation. By default, `Wait()` ends when the socket closes
+and reports `ErrConnectionRevoked`, `ErrConnectionExpired`, or
+`ErrInvocationOutcomeUnknown` when appropriate. With `AllowOperatorReconnect`
+enabled, `Wait()` stays blocked until local shutdown. Each operator request
+authorizes one fresh registration using the original invocation options and handler.
+In-flight work is never replayed. Cancellation is
 cooperative and cannot reverse completed side effects. Each connection serves one
 active invocation at a time, with a maximum aggregate text output of 1 MiB.
 

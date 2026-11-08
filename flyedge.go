@@ -406,9 +406,12 @@ func (g *Guard) Close() error {
 	g.invocationMu.Lock()
 	g.invocationClosed = true
 	invocations := append([]*InvocationConnection(nil), g.invocations...)
+	for _, c := range invocations {
+		c.cancel()
+	}
 	g.invocationMu.Unlock()
 	for _, c := range invocations {
-		_ = c.Close()
+		<-c.done
 	}
 	g.pollMu.Lock()
 	stop, done := g.pollStop, g.pollDone

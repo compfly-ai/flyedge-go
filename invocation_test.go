@@ -331,7 +331,7 @@ func TestInvocationHeartbeatUsesLibraryPingPong(t *testing.T) {
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 160*time.Millisecond)
 	defer cancel()
-	err := invocationHeartbeat(ctx, c.ws, 20*time.Millisecond, 100*time.Millisecond)
+	err := invocationHeartbeat(ctx, c.lease.ws, 20*time.Millisecond, 100*time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("heartbeat: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestInvocationHeartbeatTimesOutWithoutPong(t *testing.T) {
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := invocationHeartbeat(ctx, c.ws, 20*time.Millisecond, 40*time.Millisecond)
+	err := invocationHeartbeat(ctx, c.lease.ws, 20*time.Millisecond, 40*time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 		t.Fatalf("expected pong deadline before parent deadline, got %v", err)
 	}
