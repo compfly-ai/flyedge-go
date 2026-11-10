@@ -1,7 +1,11 @@
 # Remote support agent
 
-For a handler and tool example with history, concurrency and canonical mocks,
-see the [scenario integration guide](../../docs/SCENARIO_INTEGRATION.md).
+Start with the [Playground walkthrough](../../docs/PLAYGROUND_SETUP.md).
+This runnable fixture accepts state and user-message history, checks policy,
+consults the before-tool mock hook, records only actual tool execution, and
+builds its reply from the governed result. Ask “What do you remember?” to inspect
+prior user messages. For full provider tool-history conversion, use the
+[reference concierge](../reference-agent/README.md).
 
 An explicit, outbound-only FlyEdge connection lets Playground and simulations invoke
 this handler without a public listener or tunnel. This deterministic example uses
