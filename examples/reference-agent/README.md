@@ -1,7 +1,7 @@
-# Reference concierge: standard reverse invocation
+# Reference concierge: standard platform invocation
 
 A provider-backed agent demonstrating FlyEdge's normal integration path: connect
-its manifest, open an outbound reverse-invocation connection, and run every turn
+its manifest, open an outbound platform-invocation connection, and run every turn
 through the same governed model and tool loop. No inbound listener is required
 for Playground or Experiments. OpenAI, Anthropic and Gemini are supported.
 
@@ -64,9 +64,9 @@ go run ./reference-agent -input 'Show my profile'  # one turn
 go run ./reference-agent -serve        # optional HTTP compatibility interface
 ```
 
-These modes do not also open a reverse connection. HTTP mode retains the existing
+These modes do not also open a invocation connection. HTTP mode retains the existing
 on-behalf-of header demonstration; it is a development fixture, not a production
-authentication layer. Use reverse invocation for the standard Playground setup.
+authentication layer. Use platform invocation for the standard Playground setup.
 
 ## Code map and tests
 

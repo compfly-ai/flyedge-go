@@ -1,6 +1,6 @@
 # Connect an agent to Playground and simulations
 
-Reverse invocation is the standard integration for Playground and Experiments.
+Platform invocation is the standard integration for Playground and Experiments.
 The agent opens an authenticated outbound WebSocket to CompFly and registers a
 handler. You do not need a public agent HTTP endpoint, ingress rule or tunnel.
 The application explicitly calls the serving API; constructing a Guard alone does
@@ -25,7 +25,7 @@ insecure loopback in the invocation options. Hosted connections require HTTPS.
 ## 2. Connect and serve the ordinary governed agent
 
 Create a Guard with explicit fail-closed behavior, connect its manifest (tools,
-models, framework, environment), and register a reverse handler. Use the incoming
+models, framework, environment), and register an invocation handler. Use the incoming
 session ID for every model/tool check and observation, and pass cancellation to
 application I/O. The handler must execute the same governed agent loop used by
 other entry points.
@@ -44,7 +44,7 @@ state or prompt text. The example's application-selected principal stays fixed.
 
 Start an example below and wait for its connection-ready message. In CompFly,
 open the registered agent's Playground and select the matching environment. The
-platform discovers its active reverse connection. A missing connection is a
+platform discovers its active invocation connection. A missing connection is a
 registration/environment/purpose problem; do not work around it by silently
 switching to an ungoverned handler.
 
@@ -141,7 +141,7 @@ failure flag to its state contract and test that branch. Neither bypasses policy
 - Disabled injection: a scenario requiring a mock is rejected.
 
 Keep the connection and Guard alive while testing. Close the connection before
-closing the Guard on shutdown. Treat loss of the reverse connection as a service
+closing the Guard on shutdown. Treat loss of the invocation connection as a service
 failure; report it and let a supervisor restart the process. Do not replay
 in-flight work automatically: the outcome may be unknown. Lease renewal keeps a
 healthy connection authorized; it is not reconnection or permission to undo a
@@ -155,7 +155,7 @@ From `examples/`, with a registered identity and a reachable gateway:
 # Deterministic order fixture; no provider key required:
 go run ./remote-agent
 
-# Real provider-backed concierge, standard outbound reverse invocation:
+# Real provider-backed concierge, standard outbound platform invocation:
 export COMPFLY_ENVIRONMENT=dev
 export OPENAI_API_KEY="<your-provider-key>"
 go run ./reference-agent -provider openai -model "<your-model>"
@@ -176,7 +176,7 @@ the deterministic support fixture above.
 
 The standard reference-agent mode does not open an HTTP listener. `-cli` selects
 terminal chat, `-input` runs a single turn, and `-serve` explicitly enables the
-optional HTTP compatibility interface. These modes do not also start reverse
+optional HTTP compatibility interface. These modes do not also start platform
 serving. Use `COMPFLY_ALLOW_INSECURE_LOOPBACK=true` only for local loopback HTTP.
 
 The reference agent calls `ServeInvocations` with these options:
