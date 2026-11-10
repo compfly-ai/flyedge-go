@@ -122,6 +122,6 @@ two concurrent scenarios with different mock values. Confirm that fixtures skip
 real execution, history is not replayed, and outputs stay in their own sessions.
 Disable injection permission and verify the mock scenario is rejected.
 
-The [Rust, Python and TypeScript companion guide](https://github.com/compfly-ai/flyedge/blob/feature/atomic-scenario-pressure/docs/SCENARIO_INTEGRATION.md)
-uses the same integration sequence. The basic Go remote-agent executable currently
-demonstrates state and policy gates; it is not the complete history/mock example.
+The [Rust, Python and TypeScript companion guide](https://github.com/compfly-ai/flyedge/blob/main/docs/SCENARIO_INTEGRATION.md)
+uses the same integration sequence. The Go remote-agent executable demonstrates state, history recall and tool mocks.
+The reference concierge also converts full tool history into provider messages.

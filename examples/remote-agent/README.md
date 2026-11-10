@@ -1,7 +1,11 @@
 # Remote support agent
 
-For a handler and tool example with history, concurrency and canonical mocks,
-see the [scenario integration guide](../../docs/SCENARIO_INTEGRATION.md).
+Start with the [Playground walkthrough](../../docs/PLAYGROUND_SETUP.md).
+This runnable fixture accepts state and user-message history, checks policy,
+consults the before-tool mock hook, records only actual tool execution, and
+builds its reply from the governed result. Ask “What do you remember?” to inspect
+prior user messages. For full provider tool-history conversion, use the
+[reference concierge](../reference-agent/README.md).
 
 An explicit, outbound-only FlyEdge connection lets Playground and simulations invoke
 this handler without a public listener or tunnel. This deterministic example uses
@@ -74,7 +78,7 @@ go run ./remote-agent
 For the local Tilt stack, use `http://127.0.0.1:8080`, set
 `COMPFLY_SIM_TELEMETRY_URL=ws://127.0.0.1:8080/v1/simulation/telemetry` if needed.
 This dedicated example explicitly enables simulation hooks and literal-loopback
-HTTP in its code. Reverse invocation serving remains explicit. Client state is
+HTTP in its code. Platform invocation serving remains explicit. Client state is
 enabled by default; set `InvocationOptions.AllowClientState` to a pointer to
 `false` to disable it. Declaring a state contract requires client state to be enabled.
 The example uses the `dev` agent label in code. `COMPFLY_API_URL` selects the
@@ -178,7 +182,7 @@ not useful. Boolean false, numeric zero, empty strings, and JSON null are retain
 ### Supplied test history
 
 Set `InvocationOptions.AllowClientHistory: true` to accept the optional
-`InvocationRequest.History` fixture over reverse invocation. It defaults to
+`InvocationRequest.History` fixture over platform invocation. It defaults to
 false and is independently enforced by the broker and SDK. `History` is a
 pointer to an ordered slice of user/assistant and linked tool messages (at most 128):
 nil means absent, a pointer to an empty slice means an explicit empty fixture.

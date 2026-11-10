@@ -51,11 +51,12 @@ func run() error {
 	// This dedicated simulation example explicitly enables these capabilities.
 	// Ordinary SDK clients still opt in through InvocationOptions.
 	c, err := g.ServeInvocations(ctx, flyedge.InvocationOptions{
-		Name:          "Remote support example",
-		Environment:   "dev",
-		Purposes:      []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval},
-		LeaseDuration: *leaseDuration,
-		AutoRenew:     autoRenew,
+		Name:               "Remote support example",
+		Environment:        "dev",
+		Purposes:           []flyedge.InvocationPurpose{flyedge.PurposePlayground, flyedge.PurposeSimulation, flyedge.PurposeEval},
+		LeaseDuration:      *leaseDuration,
+		AutoRenew:          autoRenew,
+		AllowClientHistory: true,
 		Contract: &flyedge.InvocationContract{State: flyedge.StateContract{Fields: map[string]flyedge.StateField{
 			"current_page":      {Type: flyedge.StateString, PlaygroundDefault: json.RawMessage(`"order-details"`)},
 			"selected_order_id": {Type: flyedge.StateString, PlaygroundDefault: json.RawMessage(`"DEMO-42"`)},
@@ -128,20 +129,49 @@ func handler(g *flyedge.Guard, baseLogger *slog.Logger) flyedge.InvocationHandle
 			return err
 		}
 		logger.Info("policy.allowed", "stage", stage)
-		logger.Info("tool.called", "tool", "lookup_order", "order_id", orderID)
-		rawJSON, err := json.Marshal(map[string]string{"order_id": orderID, "status": orderStatus})
+		args := map[string]any{"order_id": orderID}
+		rawJSON, mocked, err := g.BeforeScenarioTool(ctx, r.SessionID, "lookup_order", args, true)
 		if err != nil {
 			return err
 		}
+		if !mocked {
+			logger.Info("tool.called", "tool", "lookup_order", "order_id", orderID)
+			rawJSON, err = json.Marshal(map[string]string{"order_id": orderID, "status": orderStatus})
+			if err != nil {
+				return err
+			}
+			argsJSON, _ := json.Marshal(args)
+			g.RecordToolIODetail(flyedge.ToolIO{SessionID: r.SessionID, RequestID: r.ID, ToolName: "lookup_order", ArgsJSON: string(argsJSON), ResultJSON: string(rawJSON)})
+		}
 		rawResult := string(rawJSON)
-		logger.Info("tool.result", "tool", "lookup_order", "content", rawResult)
+		logger.Info("tool.result", "tool", "lookup_order", "mocked", mocked, "content", rawResult)
 		stage = "tool_result"
 		result, _, err := g.GovernToolResult(ctx, r.SessionID, "lookup_order", rawResult)
 		if err != nil {
 			return err
 		}
 		logger.Info("tool.governed_result", "tool", "lookup_order", "content", result)
-		reply := fmt.Sprintf("Order %s is %s. Tool evidence: %s", orderID, orderStatus, result)
+		reply, err := orderReply(orderID, result)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(prompt), "remember") {
+			history := []flyedge.InvocationMessage{}
+			if r.History != nil {
+				history = append(history, (*r.History)...)
+			}
+			if len(r.Messages) > 0 {
+				history = append(history, r.Messages[:len(r.Messages)-1]...)
+			}
+			prior := []string{}
+			for _, m := range history {
+				if m.Role == "user" {
+					prior = append(prior, m.Content)
+				}
+			}
+			encoded, _ := json.Marshal(prior)
+			reply = "Earlier user messages: " + string(encoded)
+		}
 		if strings.Contains(strings.ToLower(prompt), "secret") || strings.Contains(strings.ToLower(prompt), "ignore") {
 			reply = "I can help check an order, but cannot reveal secrets or ignore safety rules."
 		}
@@ -152,4 +182,19 @@ func handler(g *flyedge.Guard, baseLogger *slog.Logger) flyedge.InvocationHandle
 		logger.Info("policy.allowed", "stage", stage)
 		return writeReply(reply)
 	}
+}
+
+func orderReply(order, result string) (string, error) {
+	var value map[string]any
+	if err := json.Unmarshal([]byte(result), &value); err != nil {
+		return "", err
+	}
+	status, _ := value["status"].(string)
+	if status == "" {
+		status = "unknown"
+	}
+	if observed, ok := value["order_id"].(string); ok {
+		order = observed
+	}
+	return fmt.Sprintf("Order %s is %s. Tool evidence: %s", order, status, result), nil
 }

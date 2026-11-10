@@ -23,12 +23,10 @@ if [ -z "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}${GEMINI_API_KEY:-}" ]; then
 	exit 1
 fi
 
-# Preflight: the guard fails OPEN by default, so an unreachable gateway silently allows everything.
-# Catch it here rather than letting the demo look like it "allowed" every action.
+# Preflight: report an unreachable gateway before starting the fail-closed reference agent.
 if ! curl -fsS -m 3 "$COMPFLY_API_URL/health" >/dev/null 2>&1; then
 	echo "✗ gateway $COMPFLY_API_URL is not reachable." >&2
 	echo "  Ensure COMPFLY_API_URL points at a reachable CompFly gateway" >&2
-	echo "  (or set FLYEDGE_FAIL_MODE=fail_closed to block instead of failing open.)" >&2
 	exit 1
 fi
 echo "✓ gateway reachable: $COMPFLY_API_URL   agent: $COMPFLY_AGENT_DID"

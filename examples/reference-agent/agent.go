@@ -44,6 +44,10 @@ type reply struct {
 
 // handle runs one user message through the governed tool-use loop.
 func (a *agent) handle(ctx context.Context, u *user, session, userText string) (*reply, error) {
+	return a.handleConversation(ctx, u, session, []flyedge.InvocationMessage{{Role: "user", Content: userText}}, "")
+}
+
+func (a *agent) handleConversation(ctx context.Context, u *user, session string, messages []flyedge.InvocationMessage, location string) (*reply, error) {
 	// Attach the session and the on-behalf-of principal so EVERY governed call in this turn — the
 	// model round-trips through the wrapped transport AND each CheckToolCall/GovernToolResult —
 	// carries them. This is what lets one agent identity be governed per end user.
@@ -55,7 +59,7 @@ func (a *agent) handle(ctx context.Context, u *user, session, userText string) (
 		return a.guardedTool(ctx, session, u, name, args)
 	}
 
-	text, steps, err := a.provider.Run(ctx, systemPrompt(u), userText, toolDefs, exec)
+	text, steps, err := a.provider.Run(ctx, systemPrompt(u), conversationWithState(messages, location), toolDefs, exec)
 	if err != nil {
 		// A pre_llm or post_llm denial arrives here as a typed error — the turn ends with a clear
 		// outcome instead of a crash.
@@ -84,7 +88,7 @@ func (a *agent) guardedTool(ctx context.Context, session string, u *user, name s
 	gov(dim, "→ tool_call: %s %s", name, string(args))
 
 	// Gate 1 — tool_call, BEFORE execution.
-	dec, err := a.guard.CheckToolCall(ctx, session, name, string(args))
+	dec, err := a.guard.CheckToolCall(ctx, session, name, json.RawMessage(args))
 	if err != nil {
 		if de, ok := flyedge.AsDenyError(err); ok {
 			gov(red, "  🛡  DENIED: %s — not executed", de.Decision.Reason)
@@ -110,7 +114,23 @@ func (a *agent) guardedTool(ctx context.Context, session string, u *user, name s
 		gov(green, "  🛡  allowed — executing")
 	}
 
-	result := def.run(u, args)
+	var effective map[string]any
+	if err := json.Unmarshal(args, &effective); err != nil {
+		s.reason = err.Error()
+		return "invalid tool arguments", true, s
+	}
+	raw, mocked, mockErr := a.guard.BeforeScenarioTool(ctx, session, name, effective, true)
+	if mockErr != nil {
+		s.reason = mockErr.Error()
+		return "scenario tool rejected: " + mockErr.Error(), true, s
+	}
+	var result string
+	if mocked {
+		result = string(raw)
+	} else {
+		result = def.run(u, args)
+		a.guard.RecordToolIODetail(flyedge.ToolIO{SessionID: session, RequestID: dec.RequestID, ToolName: name, ArgsJSON: string(args), ResultJSON: result})
+	}
 
 	// Gate 2 — tool_call_response: govern the result before the model sees it. The returned value
 	// may differ from the raw result (redaction, or injection during an attack simulation) — always

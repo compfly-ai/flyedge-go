@@ -1,8 +1,5 @@
 # Flyedge Go SDK
 
-For a handler and tool example with history, concurrency and canonical mocks,
-see the [scenario integration guide](docs/SCENARIO_INTEGRATION.md).
-
 **Govern AI agents at the edge, where model requests, tool calls, and data cross
 application boundaries.**
 
@@ -15,6 +12,11 @@ The SDK is deliberately explicit and idiomatic Go: construct a `Guard`, pass it 
 your application, and wire it into the boundaries you want governed. Policy denials are
 typed errors. There is no global singleton, import-time side effect, or framework-specific
 monkeypatching.
+
+Go applications use this independent Go runtime. Rust applications use the
+[FlyEdge Rust core](https://github.com/compfly-ai/flyedge/tree/main/crates/flyedge-core);
+Python and TypeScript map to that core through PyO3 and NAPI-RS native bindings.
+See the [shared-core architecture](https://github.com/compfly-ai/flyedge#one-rust-core-native-language-apis).
 
 ## How it works
 
@@ -155,14 +157,14 @@ another path. Kill switches surface separately as `*KillSwitchError`.
 | `identity` | DID + Ed25519 request signing |
 | `telemetry` | telemetry sinks and the protection report |
 | `telemetry/otel` | OpenTelemetry sink (separate module) |
-| `langchaingo` | Reverse-invocation conversation to langchaingo messages (separate module) |
+| `langchaingo` | Platform-invocation conversation to langchaingo messages (separate module) |
 | `simulation` | simulation client and attack injection |
 
 ## Examples
 
 Runnable programs in [`examples/`](examples/), each with its own README:
 
-- `reference-agent` — the complete integration surface (Connect, heartbeat, local controls, all four stages, on-behalf-of identity) as a chat REPL, one-off, or OpenAI-compatible HTTP service, with a ready-made custom control to test enforcement
+- `reference-agent` — the complete integration surface (Connect, heartbeat, local controls, all four stages, on-behalf-of identity) over standard platform invocation, with optional chat REPL, one-off, or HTTP modes, with a ready-made custom control to test enforcement
 - `agent` — one governed transport wrap across the Anthropic and OpenAI SDKs
 - `openai`, `gemini` — single-provider governed model + tool calls
 - `agentframework` — Microsoft Agent Framework Go with governed model and automatic tool calls
@@ -194,6 +196,12 @@ columns require consumer support. Callers choose which content to capture and
 must populate these optional fields; the SDK does not collect it automatically.
 
 ## Explicit platform invocations
+
+Platform invocation is the standard connection for Playground, simulations, and
+evaluations. The agent opens an authenticated outbound WebSocket; no public HTTP
+listener or tunnel is required. Follow the [Playground setup guide](docs/PLAYGROUND_SETUP.md)
+for state, history, and tool-mocking walkthroughs, and the
+[scenario integration guide](docs/SCENARIO_INTEGRATION.md) for handler and tool code.
 
 The SDK sends a WebSocket Ping every 30 seconds and waits up to 30 seconds for
 the matching Pong using the WebSocket library. This runs independently of HTTP
@@ -255,16 +263,16 @@ selects the local or hosted deployment.
 
 | API | Behavior |
 | --- | --- |
-| `AllowSimulationInjection` | Defaults to enabled when `nil` for reverse invocation. Set a `*bool` pointing to `false` to disable injected mocks. |
+| `AllowSimulationInjection` | Defaults to enabled when `nil` for platform invocation. Set a `*bool` pointing to `false` to disable injected mocks. |
 | `InvocationOptions.Purposes` | Explicitly permits `PurposePlayground`, `PurposeSimulation`, and/or `PurposeEval`. |
 | `LeaseDuration` | Renewable authorization window, default one hour; accepted range 1 second–24 hours. |
 | `AutoRenew` | `*bool`, default true when nil. A pointer to false creates a finite lease. Renewal keeps the same connection alive until stopped or revoked. |
 | `AllowClientState` | `*bool`, default true when nil. A pointer to false rejects state. A declared state contract requires it to be enabled. |
+| `AllowClientHistory` | Opt-in permission for caller-supplied conversation history. Map `request.History` followed by `request.Messages` into your provider conversation without re-executing past tool calls. |
 | `Contract.State` | Declares `Fields` and optional `Required` names. Types: `StateString`, `StateNumber`, `StateBoolean`, `StateJSON`. No state defaults are injected. |
-| `AllowSimulationInjection` | Default false. Explicitly allows simulation mutation hooks; unprotected baseline execution is not supported. |
 | `RequestTimeout` | Invocation timeout, default two minutes; accepted range 1 second–10 minutes. |
-| `InvocationRequest` | Contains `ID`, `Purpose`, `Messages`, `SessionID`, `RunID`, `Deadline`, optional `State`, and `ContractVersion`. |
-| `InvocationWriter.TextDelta` | Sends a text chunk immediately over the reverse WebSocket. The current platform broker collects chunks before returning the full response to Playground. |
+| `InvocationRequest` | Contains `ID`, `Purpose`, `Messages`, `SessionID`, `RunID`, `Deadline`, optional `State` and `History`, and `ContractVersion`. |
+| `InvocationWriter.TextDelta` | Sends a text chunk immediately over the outbound WebSocket. The current platform broker collects chunks before returning the full response to Playground. |
 | `InvocationConnection` | Exposes the lease `ID`, pinned `ContractVersion`, `ExpiresAt()`, `Close()`, and blocking `Wait()`. |
 
 `State` is `map[string]json.RawMessage`: nil means no state was supplied; a non-nil
@@ -284,6 +292,11 @@ connections do not automatically reconnect or replay in-flight work. Platform
 revocation is terminal; renewing the lease cannot undo it. Cancellation is
 cooperative and cannot reverse completed side effects. Each connection serves one
 active invocation at a time, with a maximum aggregate text output of 1 MiB.
+
+The [reference concierge](examples/reference-agent/README.md) serves platform
+invocations by default, with optional location state, provider conversation history,
+and before-tool mock hooks. Use `go run ./reference-agent -provider openai -model <your-model>`
+from `examples/` with the configured agent identity and provider key.
 
 See [the runnable support agent](examples/remote-agent/README.md) and
 [its scenario-owned state dataset](examples/remote-agent/datasets/client-state.json)
@@ -307,7 +320,7 @@ Scenarios and runtime requests never have missing fields filled automatically;
 they continue to carry exactly their supplied state. Omit the default when it is
 not useful. Boolean false, numeric zero, empty strings, and JSON null are retained.
 
-Reverse-invocation injection is enabled by default; endpoint integrations are unchanged.
+Platform-invocation injection is enabled by default; endpoint integrations are unchanged.
 `AllowSimulationInjection` is now `*bool`, matching the optional-state convention.
 Existing callers setting it to `true` can omit it; callers disabling it should use
 `disabled := false` and `AllowSimulationInjection: &disabled`. This default does not
