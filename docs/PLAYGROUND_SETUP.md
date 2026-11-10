@@ -40,6 +40,33 @@ within one session.
 Do not take the customer principal, policy, or permission to mock from supplied
 state or prompt text. The example's application-selected principal stays fixed.
 
+### Report measured model usage
+
+Pass the invocation handler's context to provider requests. The existing
+`WrapRoundTripper` records measured OpenAI Chat/Responses, Anthropic and Gemini
+usage on that Guard's admitted invocation. Its completion frame includes the
+optional version 1 `agent_usage` envelope, bound to the invocation and session.
+Failed invocation frames omit this envelope. This does not add a second model
+telemetry event.
+
+For a provider integration that does not use this transport, call
+`guard.RecordInvocationUsage(ctx, callID, model, usage)` once for each started
+attempt, including failed attempts. Use a distinct stable ID per attempt; repeated
+IDs are deduplicated. Do not also record an attempt already captured by the wrapped
+transport. `ModelUsage` uses `*uint64` fields: nil means unknown and a pointer to
+zero means measured zero. `InputTokens` includes cached input. A nil usage value
+records an unknown attempt. Supply provider counts, never estimates or counts
+borrowed from judge calls.
+
+For a failed, cancelled or interrupted attempt, leave output, reasoning and total
+unknown; known input and cache counts may remain. The transport applies this
+rule to incomplete streams, including streams not consumed before the handler
+returns. Missing provider dimensions stay unknown. Totals may be summed from
+measured input and output, but any unknown attempt keeps the invocation total
+unknown even when later attempts report usage. Counts recorded outside this
+Guard's active invocation context or after completion are ignored. Invalid or
+oversized observations suppress the envelope rather than report a complete total.
+
 ## 3. Open Playground and supply starting state
 
 Start an example below and wait for its connection-ready message. In CompFly,

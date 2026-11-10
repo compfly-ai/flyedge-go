@@ -150,13 +150,14 @@ type InvocationWriter interface {
 type InvocationHandler func(context.Context, InvocationRequest, InvocationWriter) error
 
 type invocationFrame struct {
-	ScenarioSnapshot map[string]any     `json:"scenario_snapshot,omitempty"`
-	Type             string             `json:"type"`
-	ExpiresAt        time.Time          `json:"expires_at,omitempty"`
-	ID               string             `json:"id,omitempty"`
-	Request          *InvocationRequest `json:"request,omitempty"`
-	Text             string             `json:"text,omitempty"`
-	Error            string             `json:"error,omitempty"`
+	AgentUsage       *invocationUsageEnvelope `json:"agent_usage,omitempty"`
+	ScenarioSnapshot map[string]any           `json:"scenario_snapshot,omitempty"`
+	Type             string                   `json:"type"`
+	ExpiresAt        time.Time                `json:"expires_at,omitempty"`
+	ID               string                   `json:"id,omitempty"`
+	Request          *InvocationRequest       `json:"request,omitempty"`
+	Text             string                   `json:"text,omitempty"`
+	Error            string                   `json:"error,omitempty"`
 }
 type InvocationConnection struct {
 	ContractVersion string
@@ -351,6 +352,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 		id       string
 		err      error
 		out      *invocationOutput
+		usage    *invocationUsageEnvelope
 	}
 	results := make(chan result, o.MaxConcurrentInvocations)
 	frames := make(chan invocationFrame)
@@ -376,6 +378,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 	type activeWork struct {
 		cancel  context.CancelFunc
 		session string
+		usage   *invocationUsage
 	}
 	active := map[string]activeWork{}
 	sessions := map[string]bool{}
@@ -391,6 +394,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 	pendingRenewal := ""
 	defer func() {
 		for _, work := range active {
+			work.usage.abandon()
 			work.cancel()
 		}
 	}()
@@ -432,10 +436,11 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				delete(sessions, work.session)
 				delete(active, r.id)
 			}
-			f := invocationFrame{Type: "completed", ID: r.id, ScenarioSnapshot: r.snapshot}
+			f := invocationFrame{Type: "completed", ID: r.id, ScenarioSnapshot: r.snapshot, AgentUsage: r.usage}
 			if r.err != nil {
 				f.Type = "failed"
 				f.Error = r.err.Error()
+				f.AgentUsage = nil
 			}
 			if c.send(c.ctx, f) != nil {
 				c.err = ErrInvocationOutcomeUnknown
@@ -546,16 +551,18 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					deadline = limit
 				}
 				work, stop := context.WithDeadline(c.ctx, deadline)
-				active[r.ID] = activeWork{stop, r.SessionID}
+				usage := newInvocationUsage(g, r.ID, r.SessionID)
+				active[r.ID] = activeWork{stop, r.SessionID, usage}
 				sessions[r.SessionID] = true
 				work = ContextWithSession(work, r.SessionID)
+				work = context.WithValue(work, invocationUsageContextKey{}, usage)
 				work = context.WithValue(work, invocationContextKey{}, invocationScope{r.RunID, *o.AllowSimulationInjection})
 				out := &invocationOutput{c: c, id: r.ID}
 				planID := ""
 				if g.simCtl != nil {
 					planID = g.simCtl.ScenarioToken()
 				}
-				go func(req InvocationRequest) {
+				go func(req InvocationRequest, usage *invocationUsage) {
 					var err error
 					func() {
 						defer func() {
@@ -568,6 +575,8 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 					if err == nil {
 						err = work.Err()
 					}
+					// Freeze the handler boundary before scenario cleanup can block.
+					agentUsage := usage.finish()
 					var snapshot map[string]any
 					if g.simCtl != nil && len(req.ScenarioPlan) > 0 {
 						snapshot = g.simCtl.EndExecution(req.SessionID)
@@ -578,10 +587,10 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 						g.simCtl.FinishScenario(req.RunID, req.SessionID, planID, err == nil)
 					}
 					select {
-					case results <- result{snapshot, req.ID, err, out}:
+					case results <- result{snapshot, req.ID, err, out, agentUsage}:
 					case <-c.ctx.Done():
 					}
-				}(*r)
+				}(*r, usage)
 			default:
 				c.err = errors.New("flyedge: unexpected invocation frame")
 				return
