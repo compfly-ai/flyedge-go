@@ -1,12 +1,5 @@
 # Flyedge Go SDK
 
-[Playground setup](docs/PLAYGROUND_SETUP.md) · [Reference agent](examples/reference-agent/README.md) · [Rust / Python / TypeScript SDK](https://github.com/compfly-ai/flyedge)
-
-Go applications use this independent Go runtime. Rust applications use the
-[FlyEdge Rust core](https://github.com/compfly-ai/flyedge/tree/main/crates/flyedge-core);
-Python and TypeScript map to that core through PyO3 and NAPI-RS native bindings.
-See the [shared-core architecture](https://github.com/compfly-ai/flyedge#one-rust-core-native-language-apis).
-
 **Govern AI agents at the edge, where model requests, tool calls, and data cross
 application boundaries.**
 
@@ -20,47 +13,10 @@ your application, and wire it into the boundaries you want governed. Policy deni
 typed errors. There is no global singleton, import-time side effect, or framework-specific
 monkeypatching.
 
-## Reverse invocation: the standard agent connection
-
-Use reverse invocation to connect agents to Playground and Experiments. The agent
-opens an authenticated outbound WebSocket and registers its governed handler;
-there is no requirement for a public HTTP listener or tunnel. `ServeInvocations`
-is explicit, and the connection stays alive until shutdown, revocation or failure.
-
-The [reference concierge](examples/reference-agent/README.md) now serves reverse
-invocations by default. It demonstrates application-owned identity, optional
-`location` state, typed conversation history for three providers, before-tool mock
-hooks, actual execution telemetry, and normal model/tool policy gates.
-The [support fixture](examples/remote-agent/README.md) provides a smaller example
-with order state, user-message history recall and tool mocks, without an LLM key.
-
-1. Register an agent and set its DID, signing key and gateway URL as above.
-2. Start the reference agent from `examples/` with a provider key:
-   `go run ./reference-agent -provider openai -model <your-model>`.
-3. Open that agent's Playground in the same environment (default `dev`).
-   Enable **Supply starting state** and try `{"location":"Paris"}`.
-4. In Experiments, supply history as setup and configure a before-tool return
-   fixture for one of the agent's tools. The application preserves history and
-   invokes `BeforeScenarioTool` after policy allows the call.
-5. Verify mocked calls skip execution, real calls retain telemetry, and both
-   result paths pass through `GovernToolResult` before reaching the model.
-
-Follow the [complete Playground and simulation walkthrough](docs/PLAYGROUND_SETUP.md)
-for state/history examples, mock-rule values, setup commands and verification.
-[Scenario integration](docs/SCENARIO_INTEGRATION.md) includes handler/tool code.
-
-State is untrusted application input, not identity or authorization. History is
-opt-in and must be mapped into the model's conversation without re-executing past
-tool calls. System-role fixtures are rejected. Mock permission is deployment
-configuration; only instrumented, matched tools are replaced, and unrelated tools
-remain live. Reverse invocation defaults injection permission on (`nil`); an
-explicit false pointer disables it. This permission alone does not create mocks.
-
-Lease renewal keeps a healthy connection authorized; it does not reconnect or
-replay requests. A lost connection must surface as a service failure so a
-supervisor can restart the process without replaying work whose outcome is unknown.
-For HTTP compatibility or terminal-only use, select the reference agent's
-`-serve`, `-cli` or `-input` modes explicitly.
+Go applications use this independent Go runtime. Rust applications use the
+[FlyEdge Rust core](https://github.com/compfly-ai/flyedge/tree/main/crates/flyedge-core);
+Python and TypeScript map to that core through PyO3 and NAPI-RS native bindings.
+See the [shared-core architecture](https://github.com/compfly-ai/flyedge#one-rust-core-native-language-apis).
 
 ## How it works
 
@@ -238,3 +194,134 @@ telemetry carries it in the reserved `data.error` key. These failures do not
 count as policy checks. Metadata is retained by ingestion, but dedicated UI
 columns require consumer support. Callers choose which content to capture and
 must populate these optional fields; the SDK does not collect it automatically.
+
+## Explicit platform invocations
+
+Reverse invocation is the standard connection for Playground, simulations, and
+evaluations. The agent opens an authenticated outbound WebSocket; no public HTTP
+listener or tunnel is required. Follow the [Playground setup guide](docs/PLAYGROUND_SETUP.md)
+for state, history, and tool-mocking walkthroughs, and the
+[scenario integration guide](docs/SCENARIO_INTEGRATION.md) for handler and tool code.
+
+The SDK sends a WebSocket Ping every 30 seconds and waits up to 30 seconds for
+the matching Pong using the WebSocket library. This runs independently of HTTP
+configuration polling, lease renewal, and agent work. A heartbeat failure ends
+the connection without reconnecting or replaying requests. Socket errors retain
+the underlying cause while remaining compatible with
+`errors.Is(err, flyedge.ErrInvocationOutcomeUnknown)`.
+
+
+`Guard.ServeInvocations` lets Playground, simulations, and evaluations invoke an
+application handler over an outbound WebSocket. Calling `New` or `Connect` does
+not enable it: your application must explicitly register a handler and authorize
+its purposes. The handler runs with your application's credentials, so wire policy
+checks into its model and tool boundaries as you would for a normal invocation.
+
+```go
+connection, err := guard.ServeInvocations(ctx, flyedge.InvocationOptions{
+    Name:        "Support agent",
+    Environment: "staging",
+    Purposes: []flyedge.InvocationPurpose{
+        flyedge.PurposePlayground,
+        flyedge.PurposeSimulation,
+        flyedge.PurposeEval,
+    },
+    Contract: &flyedge.InvocationContract{
+        State: flyedge.StateContract{
+            Fields: map[string]flyedge.StateField{
+                "selected_order_id": {Type: flyedge.StateString},
+                "form":              {Type: flyedge.StateJSON},
+            },
+        },
+    },
+}, func(ctx context.Context, request flyedge.InvocationRequest, out flyedge.InvocationWriter) error {
+    // Optional state is application input. Convert it into your own domain or
+    // protobuf types, initialize test context, and run your application logic.
+    var selectedOrder string
+    if raw, supplied := request.State["selected_order_id"]; supplied {
+        if err := json.Unmarshal(raw, &selectedOrder); err != nil {
+            return err
+        }
+    }
+    // Invoke your governed application here. TextDelta may be called repeatedly
+    // as your model produces text. Returning nil completes this invocation.
+    return out.TextDelta(ctx, "Selected order: " + selectedOrder)
+})
+if err != nil {
+    return err
+}
+defer connection.Close()
+return connection.Wait()
+```
+
+This snippet uses `encoding/json`. Configure the Guard with its DID and Ed25519
+private key as in Quick start. Registration is signed, requires an existing
+platform agent, and publishes the state contract before accepting invocations.
+HTTPS is required; `AllowInsecureLoopback: true` permits only literal loopback HTTP
+for local development. `Environment` selects an agent environment; `APIURL`
+selects the local or hosted deployment.
+
+| API | Behavior |
+| --- | --- |
+| `AllowSimulationInjection` | Defaults to enabled when `nil` for reverse invocation. Set a `*bool` pointing to `false` to disable injected mocks. |
+| `InvocationOptions.Purposes` | Explicitly permits `PurposePlayground`, `PurposeSimulation`, and/or `PurposeEval`. |
+| `LeaseDuration` | Renewable authorization window, default one hour; accepted range 1 second–24 hours. |
+| `AutoRenew` | `*bool`, default true when nil. A pointer to false creates a finite lease. Renewal keeps the same connection alive until stopped or revoked. |
+| `AllowClientState` | `*bool`, default true when nil. A pointer to false rejects state. A declared state contract requires it to be enabled. |
+| `AllowClientHistory` | Opt-in permission for caller-supplied conversation history. Map `request.History` followed by `request.Messages` into your provider conversation without re-executing past tool calls. |
+| `Contract.State` | Declares `Fields` and optional `Required` names. Types: `StateString`, `StateNumber`, `StateBoolean`, `StateJSON`. No state defaults are injected. |
+| `RequestTimeout` | Invocation timeout, default two minutes; accepted range 1 second–10 minutes. |
+| `InvocationRequest` | Contains `ID`, `Purpose`, `Messages`, `SessionID`, `RunID`, `Deadline`, optional `State` and `History`, and `ContractVersion`. |
+| `InvocationWriter.TextDelta` | Sends a text chunk immediately over the reverse WebSocket. The current platform broker collects chunks before returning the full response to Playground. |
+| `InvocationConnection` | Exposes the lease `ID`, pinned `ContractVersion`, `ExpiresAt()`, `Close()`, and blocking `Wait()`. |
+
+`State` is `map[string]json.RawMessage`: nil means no state was supplied; a non-nil
+empty map means explicit empty state. A dataset scenario supplies its own literal
+`state` object, and Playground supplies values entered in the state editor. The
+platform validates supplied values against the declared contract. Optional typed
+fields should be omitted rather than set to null; required fields are checked
+when state is supplied. State is not an authenticated identity or authorization
+grant. Your application explicitly decides how to consume it before the agentic
+layer runs. New evaluations do not select run-wide state profiles or substitute
+tokens inside state.
+
+The handler context is canceled on timeout, shutdown, or revocation. Returning an
+error fails that invocation. `Wait()` reports `ErrConnectionRevoked`,
+`ErrConnectionExpired`, or `ErrInvocationOutcomeUnknown` when appropriate. Lost
+connections do not automatically reconnect or replay in-flight work. Platform
+revocation is terminal; renewing the lease cannot undo it. Cancellation is
+cooperative and cannot reverse completed side effects. Each connection serves one
+active invocation at a time, with a maximum aggregate text output of 1 MiB.
+
+The [reference concierge](examples/reference-agent/README.md) serves reverse
+invocations by default, with optional location state, provider conversation history,
+and before-tool mock hooks. Use `go run ./reference-agent -provider openai -model <your-model>`
+from `examples/` with the configured agent identity and provider key.
+
+See [the runnable support agent](examples/remote-agent/README.md) and
+[its scenario-owned state dataset](examples/remote-agent/datasets/client-state.json)
+for an example with tool calls, policy checks, colored logs, and simulation telemetry.
+
+### Optional Playground defaults
+
+`StateField.PlaygroundDefault` is optional JSON editor metadata:
+
+```go
+"selected_order_id": {
+    Type: flyedge.StateString,
+    PlaygroundDefault: json.RawMessage(`"DEMO-42"`),
+},
+```
+
+The SDK and Platform validate the default against the declared type. Playground
+prefills it when the user enables **Supply starting state**, and preserves edits
+when toggling state off and back on. No default is sent while state is disabled.
+Scenarios and runtime requests never have missing fields filled automatically;
+they continue to carry exactly their supplied state. Omit the default when it is
+not useful. Boolean false, numeric zero, empty strings, and JSON null are retained.
+
+Reverse-invocation injection is enabled by default; endpoint integrations are unchanged.
+`AllowSimulationInjection` is now `*bool`, matching the optional-state convention.
+Existing callers setting it to `true` can omit it; callers disabling it should use
+`disabled := false` and `AllowSimulationInjection: &disabled`. This default does not
+create mocks: scenario overrides and the application's before-tool hook still control them.
