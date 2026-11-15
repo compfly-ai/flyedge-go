@@ -121,7 +121,9 @@ func (m *scenarioMocks) observe(session, event, name string, detail map[string]a
 	}
 	detail["event"] = event
 	detail["name"] = name
-	detail["component"] = "tool"
+	if detail["component"] == nil {
+		detail["component"] = "tool"
+	}
 	detail["plan_id"] = p.ID
 	detail["step_id"] = p.Step
 	detail["session_id"] = session
@@ -367,4 +369,17 @@ func (c *Controller) HasExecution(session string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.executions[session] != nil
+}
+
+// ObserveScenarioPolicy retains actual check decisions in invocation evidence.
+func (c *Controller) ObserveScenarioPolicy(session, stage, tool string, outcome map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if m := c.executions[session]; m != nil {
+		component, name := "tool", tool
+		if stage == "pre_llm" || stage == "post_llm" {
+			component, name = "llm", stage
+		}
+		m.observe(session, "policy.decision", name, map[string]any{"component": component, "stage": stage, "outcome": outcome})
+	}
 }

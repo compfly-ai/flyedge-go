@@ -271,7 +271,7 @@ selects the local or hosted deployment.
 | `AllowClientHistory` | Opt-in permission for caller-supplied conversation history. Map `request.History` followed by `request.Messages` into your provider conversation without re-executing past tool calls. |
 | `Contract.State` | Declares `Fields` and optional `Required` names. Types: `StateString`, `StateNumber`, `StateBoolean`, `StateJSON`. No state defaults are injected. |
 | `RequestTimeout` | Invocation timeout, default two minutes; accepted range 1 second–10 minutes. |
-| `InvocationRequest` | Contains `ID`, `Purpose`, `Messages`, `SessionID`, `RunID`, `Deadline`, optional `State` and `History`, and `ContractVersion`. |
+| `InvocationRequest` | Contains `ID`, `Purpose`, `Messages`, `SessionID`, `RunID`, `Deadline`, optional `State`, `History`, and `Traceparent`, and `ContractVersion`. A valid W3C v00 `Traceparent` scopes handler-context checks to the turn trace without changing `SessionID`; absent or malformed values keep the existing trace fallback. |
 | `InvocationWriter.TextDelta` | Sends a text chunk immediately over the outbound WebSocket. The current platform broker collects chunks before returning the full response to Playground. |
 | `InvocationConnection` | Exposes the lease `ID`, pinned `ContractVersion`, `ExpiresAt()`, `Close()`, and blocking `Wait()`. |
 
