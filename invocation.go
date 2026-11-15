@@ -50,6 +50,8 @@ type InvocationMessage struct {
 	ToolCallID string               `json:"toolCallId,omitempty"`
 }
 type InvocationRequest struct {
+	// Traceparent scopes checks to this turn; missing or invalid W3C v00 values are ignored.
+	Traceparent  string          `json:"traceparent,omitempty"`
 	ScenarioPlan json.RawMessage `json:"scenario_plan,omitempty"`
 	// History is a caller-provided test fixture, separate from live Messages.
 	// The handler owns applying it; nil is absent, pointer to empty is explicit empty.
@@ -549,6 +551,9 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				active[r.ID] = activeWork{stop, r.SessionID}
 				sessions[r.SessionID] = true
 				work = ContextWithSession(work, r.SessionID)
+				if m := inboundTrace.FindStringSubmatch(r.Traceparent); m != nil && m[1] == "00" && m[2] != strings.Repeat("0", 32) && m[3] != strings.Repeat("0", 16) {
+					work = ContextWithTrace(work, m[2], m[3])
+				}
 				work = context.WithValue(work, invocationContextKey{}, invocationScope{r.RunID, *o.AllowSimulationInjection})
 				out := &invocationOutput{c: c, id: r.ID}
 				planID := ""
