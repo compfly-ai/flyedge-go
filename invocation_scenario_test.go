@@ -37,7 +37,7 @@ func TestInvocationLiveToolScenarios(t *testing.T) {
 		{name: "wrong run denied", active: true, run: "other", overrides: `[]`, wantError: "active simulation belongs to another run"},
 		{name: "attack mode denied", active: true, run: "run", overrides: `[]`, extra: `{"attack_injector":{"mode":"attack"}}`, wantError: "simulation hooks require explicit permission"},
 		{name: "global mock denied", active: true, run: "run", overrides: `[]`, extra: `{"scenario_overrides":{"id":"global","session_id":"eval:run:s","step_id":"ask","overrides":[{"id":"r","tool":"read","occurrence":1,"arguments":{},"value":"mock","required_matches":1}]}}`, wantError: "simulation hooks require explicit permission"},
-		{name: "policy denial retained", active: true, run: "run", overrides: `[]`, deny: true, wantError: "policy denied"},
+		{name: "policy denial retained", active: true, run: "run", overrides: `[]`, deny: true, wantError: `{"version":1,"code":"policy_denied","message":"Use an approved tool."}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -73,7 +73,7 @@ func TestInvocationLiveToolScenarios(t *testing.T) {
 			der, _ := x509.MarshalPKCS8PrivateKey(priv)
 			checker := &mediaChecker{decision: Decision{Action: ActionAllow}}
 			if tc.deny {
-				checker.decision = Decision{Action: ActionDeny, Reason: "policy denied"}
+				checker.decision = Decision{Action: ActionDeny, Reason: "policy denied", Message: "Use an approved tool."}
 			}
 			g, err := New(Config{APIURL: broker.URL, DID: "did:compfly:org:agent", KeyPEM: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})}, WithEnforcer(checker))
 			if err != nil {

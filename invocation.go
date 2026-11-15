@@ -143,7 +143,8 @@ func (o InvocationOptions) validate() (InvocationOptions, error) {
 }
 
 // InvocationWriter streams text to Platform. Returning nil from the handler completes
-// the response; returning an error fails it. Calls after handler completion fail.
+// the response; returning an error fails it. A *DenyError (including a wrapped one)
+// reports a policy denial with Decision.Message to Platform. Calls after handler completion fail.
 type InvocationWriter interface {
 	TextDelta(context.Context, string) error
 }
@@ -436,6 +437,14 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 			if r.err != nil {
 				f.Type = "failed"
 				f.Error = r.err.Error()
+				if denial, ok := AsDenyError(r.err); ok {
+					payload, _ := json.Marshal(struct {
+						Version int    `json:"version"`
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					}{1, "policy_denied", denial.Decision.Message})
+					f.Error = string(payload)
+				}
 			}
 			if c.send(c.ctx, f) != nil {
 				c.err = ErrInvocationOutcomeUnknown
