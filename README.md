@@ -73,6 +73,13 @@ Call `CheckToolCall` before executing a tool and `CheckToolResponse` before retu
 its result to the model. This is what lets Flyedge stop a dangerous action instead of
 merely observing it.
 
+Use `WithDecisionHandler(func(CheckRequest, Decision))` at Guard construction to
+observe final policy decisions, including transport warnings that allow a provider
+request to continue. Read `Decision.Warnings` and `Decision.Message`; an allowed
+decision can carry warnings. The optional callback runs once per `Check`, before
+it returns, and must be concurrency-safe and treat its arguments as read-only.
+Gateway-only `ProxyMode` decisions do not pass through this callback.
+
 See the [complete developer guide](docs/DEVELOPER_GUIDE_GO.md) for Anthropic, OpenAI,
 Gemini, langchaingo, tool-use loops, identity, telemetry, and production configuration.
 

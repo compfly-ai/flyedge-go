@@ -127,6 +127,7 @@ type Guard struct {
 	pollStop           chan struct{}
 	pollDone           chan struct{}
 
+	onDecision        func(CheckRequest, Decision)
 	onModeChange      func(old, cur ModelMode)
 	onManifestRefresh func()
 	onSimChange       func(*SimulationConfig) // internal hook; the sim controller attaches here
@@ -265,6 +266,10 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (decision Decision,
 		if ea, ok := enforce.EndpointAgentFromContext(ctx); ok {
 			req.EndpointAgent = &ea
 		}
+	}
+
+	if g.onDecision != nil {
+		defer func() { g.onDecision(req, decision) }()
 	}
 
 	// Trace propagation: give this check its own span under the caller's trace
