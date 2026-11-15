@@ -34,7 +34,7 @@ func (b *usageCleanupBlock) MarshalJSON() ([]byte, error) {
 func TestInvocationUsageCompletionIsBoundToEachAdmittedTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	completions := make(chan invocationFrame, 5)
+	completions := make(chan invocationFrame, 6)
 	block := &usageCleanupBlock{entered: make(chan struct{}), release: make(chan struct{})}
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(block.release) }) }
@@ -64,8 +64,8 @@ func TestInvocationUsageCompletionIsBoundToEachAdmittedTurn(t *testing.T) {
 			return
 		}
 		defer release()
-		for _, id := range []string{"known", "partial", "next", "failed", "cleanup"} {
-			req := &InvocationRequest{ID: id, Purpose: PurposeEval, SessionID: "session", Messages: []InvocationMessage{{Role: "user", Content: "fixture"}}, Deadline: time.Now().Add(time.Second)}
+		for _, id := range []string{"known", "partial", "next", "failed", "denied", "cleanup"} {
+			req := &InvocationRequest{Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", ID: id, Purpose: PurposeEval, SessionID: "session", Messages: []InvocationMessage{{Role: "user", Content: "fixture"}}, Deadline: time.Now().Add(time.Second)}
 			if id == "cleanup" {
 				req.RunID = "run"
 				req.SessionID = "eval:run:cleanup"
@@ -125,6 +125,9 @@ func TestInvocationUsageCompletionIsBoundToEachAdmittedTurn(t *testing.T) {
 	allowInjection := true
 	var old context.Context
 	connection, err := g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposeEval}, AllowSimulationInjection: &allowInjection, AllowInsecureLoopback: true}, func(ctx context.Context, req InvocationRequest, _ InvocationWriter) error {
+		if traceID, spanID, ok := traceFromContext(ctx); !ok || traceID != "0123456789abcdef0123456789abcdef" || spanID != "0123456789abcdef" {
+			t.Error("usage context lost invocation trace")
+		}
 		if old != nil {
 			g.RecordInvocationUsage(old, "late", "model", &ModelUsage{TotalTokens: measured(999)})
 		}
@@ -139,6 +142,9 @@ func TestInvocationUsageCompletionIsBoundToEachAdmittedTurn(t *testing.T) {
 			g.RecordInvocationUsage(ctx, "known-later", "model", &ModelUsage{InputTokens: measured(3), OutputTokens: measured(4)})
 		}
 		(&Guard{}).RecordInvocationUsage(ctx, "judge", "judge", &ModelUsage{TotalTokens: measured(1000)})
+		if req.ID == "denied" {
+			return &DenyError{Decision: Decision{Action: ActionDeny, Message: "Use an approved request."}}
+		}
 		if req.ID == "failed" {
 			return errors.New("fixture failure")
 		}
@@ -159,12 +165,18 @@ func TestInvocationUsageCompletionIsBoundToEachAdmittedTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var frames []invocationFrame
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 6; i++ {
 		frame := <-completions
 		frames = append(frames, frame)
 		if frame.ID == "failed" {
 			if frame.Type != "failed" || frame.Error != "fixture failure" || frame.AgentUsage != nil {
 				t.Fatalf("failed invocation advertised completed usage: %+v", frame)
+			}
+			continue
+		}
+		if frame.ID == "denied" {
+			if frame.Type != "failed" || frame.Error != `{"version":1,"code":"policy_denied","message":"Use an approved request."}` || frame.AgentUsage != nil {
+				t.Fatalf("policy denial lost its structured error or advertised usage: %+v", frame)
 			}
 			continue
 		}

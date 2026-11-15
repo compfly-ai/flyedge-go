@@ -50,6 +50,8 @@ type InvocationMessage struct {
 	ToolCallID string               `json:"toolCallId,omitempty"`
 }
 type InvocationRequest struct {
+	// Traceparent scopes checks to this turn; missing or invalid W3C v00 values are ignored.
+	Traceparent  string          `json:"traceparent,omitempty"`
 	ScenarioPlan json.RawMessage `json:"scenario_plan,omitempty"`
 	// History is a caller-provided test fixture, separate from live Messages.
 	// The handler owns applying it; nil is absent, pointer to empty is explicit empty.
@@ -143,7 +145,8 @@ func (o InvocationOptions) validate() (InvocationOptions, error) {
 }
 
 // InvocationWriter streams text to Platform. Returning nil from the handler completes
-// the response; returning an error fails it. Calls after handler completion fail.
+// the response; returning an error fails it. A *DenyError (including a wrapped one)
+// reports a policy denial with Decision.Message to Platform. Calls after handler completion fail.
 type InvocationWriter interface {
 	TextDelta(context.Context, string) error
 }
@@ -441,6 +444,14 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				f.Type = "failed"
 				f.Error = r.err.Error()
 				f.AgentUsage = nil
+				if denial, ok := invocationPolicyDenial(r.err); ok {
+					payload, _ := json.Marshal(struct {
+						Version int    `json:"version"`
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					}{1, "policy_denied", denial.Decision.Message})
+					f.Error = string(payload)
+				}
 			}
 			if c.send(c.ctx, f) != nil {
 				c.err = ErrInvocationOutcomeUnknown
@@ -556,6 +567,11 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				sessions[r.SessionID] = true
 				work = ContextWithSession(work, r.SessionID)
 				work = context.WithValue(work, invocationUsageContextKey{}, usage)
+				invocationTraceID := ""
+				if m := inboundTrace.FindStringSubmatch(r.Traceparent); m != nil && m[1] == "00" && m[2] != strings.Repeat("0", 32) && m[3] != strings.Repeat("0", 16) {
+					work = ContextWithTrace(work, m[2], m[3])
+					invocationTraceID = m[2]
+				}
 				work = context.WithValue(work, invocationContextKey{}, invocationScope{r.RunID, *o.AllowSimulationInjection})
 				out := &invocationOutput{c: c, id: r.ID}
 				planID := ""
@@ -582,6 +598,16 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 						snapshot = g.simCtl.EndExecution(req.SessionID)
 						if snapshot != nil {
 							snapshot["handler_success"] = err == nil
+							snapshot["policy_decisions_supported"] = true
+							if _, denied := invocationPolicyDenial(err); denied {
+								snapshot["handler_outcome"] = "policy_denied"
+							}
+							if invocationTraceID != "" {
+								snapshot["trace_id"] = invocationTraceID
+								for _, raw := range snapshot["events"].([]any) {
+									raw.(map[string]any)["trace_id"] = invocationTraceID
+								}
+							}
 						}
 					} else if g.simCtl != nil {
 						g.simCtl.FinishScenario(req.RunID, req.SessionID, planID, err == nil)
@@ -636,4 +662,18 @@ func scenarioPlanRequiresInjection(raw json.RawMessage) bool {
 		}
 	}
 	return false
+}
+
+// Infrastructure and admission failures are not completed policy evaluations.
+// An omitted action preserves compatibility with callers constructing DenyError directly.
+func invocationPolicyDenial(err error) (*DenyError, bool) {
+	denial, ok := AsDenyError(err)
+	if !ok || denial == nil || len(denial.Decision.Kills) > 0 || (denial.Decision.Action != "" && denial.Decision.Action != ActionDeny) {
+		return nil, false
+	}
+	switch denial.Decision.Reason {
+	case "enforcement_unavailable", "remote_simulation_not_authorized", "kill_switch", "indeterminate":
+		return nil, false
+	}
+	return denial, true
 }
