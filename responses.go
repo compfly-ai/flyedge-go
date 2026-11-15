@@ -78,7 +78,7 @@ func (t *guardRoundTripper) roundTripResponses(req *http.Request) (*http.Respons
 	if err := check(req.Context(), StagePreLLM, responsesPrompt(body), map[string]any{"context_partial": partial}); err != nil {
 		return nil, err
 	}
-	resp, err := t.base.RoundTrip(req)
+	resp, err := t.roundTripModel(req, model)
 	if err != nil || resp == nil || !t.checkResponse || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, err
 	}

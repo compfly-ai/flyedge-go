@@ -164,7 +164,7 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		return t.proxyForward(req, body)
 	}
 
-	resp, rerr := t.base.RoundTrip(req)
+	resp, rerr := t.roundTripModel(req, model)
 	if rerr != nil || !t.checkResponse || resp == nil {
 		return resp, rerr
 	}
@@ -216,6 +216,18 @@ func (t *guardRoundTripper) inspectResponse(req *http.Request, resp *http.Respon
 // provider and streams the response back. The provider's own auth headers pass through unchanged.
 // A policy deny surfaces as prism's HTTP error status (the SDK sees it as an API error).
 func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.Response, error) {
+	model := ""
+	if extract := extractorFor(req.URL.Hostname(), req.URL.Path); extract != nil {
+		_, model = extract(body)
+	}
+	if model == "" {
+		var request struct {
+			Model string `json:"model"`
+		}
+		if json.Unmarshal(body, &request) == nil {
+			model = request.Model
+		}
+	}
 	dest := req.URL.String()
 	prismURL, err := url.Parse(strings.TrimRight(t.guard.cfg.APIURL, "/") + "/v1/proxy")
 	if err != nil {
@@ -243,7 +255,7 @@ func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.
 			req.Header.Set(k, v)
 		}
 	}
-	return t.base.RoundTrip(req)
+	return t.roundTripModel(req, model)
 }
 
 // extractor pulls the latest user message and model from a provider request body.
