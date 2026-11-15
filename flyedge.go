@@ -202,7 +202,7 @@ func randID() string {
 
 // Check applies platform decisions unchanged. Mode is retained only for legacy
 // SDK-local detectors and never skips, weakens, or escalates a platform result.
-func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
+func (g *Guard) Check(ctx context.Context, req CheckRequest) (decision Decision, err error) {
 	if len(req.Content.Attachments) > 0 {
 		clean := mediaAuditText(req.Content.Full)
 		if clean != req.Content.Full {
@@ -223,6 +223,27 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (Decision, error) {
 	}
 	if session := inboundSessionFromContext(ctx); session != "" {
 		req.SessionID = session
+	}
+	if g.simCtl != nil && g.simCtl.HasExecution(req.SessionID) {
+		defer func() {
+			if decision.Action != "" {
+				outcome := map[string]any{"action": string(decision.Action), "reason": decision.Reason}
+				if decision.Message != "" {
+					outcome["message"] = decision.Message
+				}
+				if decision.PolicyVersion != "" {
+					outcome["policy_version"] = decision.PolicyVersion
+				}
+				requestID := decision.RequestID
+				if requestID == "" {
+					requestID = req.RequestID
+				}
+				if requestID != "" {
+					outcome["request_id"] = requestID
+				}
+				g.simCtl.ObserveScenarioPolicy(req.SessionID, string(req.Stage), req.Operation.ToolName, outcome)
+			}
+		}()
 	}
 	// Default correlation ids once, so every gate — including the manual
 	// CheckToolCall/CheckToolResponse/CheckModelResponse helpers, not just the

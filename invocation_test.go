@@ -519,12 +519,17 @@ var invocationDenialCases = map[string]struct {
 	message string
 	policy  bool
 }{
-	"denial":           {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "internal reason", Message: "Use an approved request."}}, "Use an approved request.", true},
-	"wrapped denial":   {fmt.Errorf("handler: %w", &DenyError{Decision: Decision{Message: "Do not send \"secrets\".\nTry again safely. ✓"}}), "Do not send \"secrets\".\nTry again safely. ✓", true},
-	"empty denial":     {&DenyError{Decision: Decision{Reason: "private reason"}}, "", true},
-	"ordinary error":   {errors.New("provider unavailable"), "provider unavailable", false},
-	"denial lookalike": {errors.New("flyedge: denied: internal reason"), "flyedge: denied: internal reason", false},
-	"kill switch":      {&KillSwitchError{Kills: []KillInfo{{Reason: "operator stop"}}}, "flyedge: kill switch active: operator stop", false},
+	"denial":                  {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "internal reason", Message: "Use an approved request."}}, "Use an approved request.", true},
+	"wrapped denial":          {fmt.Errorf("handler: %w", &DenyError{Decision: Decision{Message: "Do not send \"secrets\".\nTry again safely. ✓"}}), "Do not send \"secrets\".\nTry again safely. ✓", true},
+	"empty denial":            {&DenyError{Decision: Decision{Reason: "private reason"}}, "", true},
+	"enforcement unavailable": {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "enforcement_unavailable"}}, "flyedge: denied: enforcement_unavailable", false},
+	"admission failure":       {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "remote_simulation_not_authorized"}}, "flyedge: denied: remote_simulation_not_authorized", false},
+	"indeterminate denial":    {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "indeterminate"}}, "flyedge: denied: indeterminate", false},
+	"kill decision":           {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "kill_switch"}}, "flyedge: denied: kill_switch", false},
+	"scoped kill":             {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "operator stop", Kills: []KillInfo{{Reason: "operator stop"}}}}, "flyedge: denied: operator stop", false},
+	"ordinary error":          {errors.New("provider unavailable"), "provider unavailable", false},
+	"denial lookalike":        {errors.New("flyedge: denied: internal reason"), "flyedge: denied: internal reason", false},
+	"kill switch":             {&KillSwitchError{Kills: []KillInfo{{Reason: "operator stop"}}}, "flyedge: kill switch active: operator stop", false},
 }
 
 func TestInvocationPolicyDenialFailure(t *testing.T) {

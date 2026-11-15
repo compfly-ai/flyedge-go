@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/compfly-ai/flyedge-go/enforce"
+	"github.com/compfly-ai/flyedge-go/simulation"
 )
 
 type invocationTraceEnforcer func(context.Context, enforce.CheckRequest) (enforce.Decision, error)
@@ -58,7 +59,8 @@ func TestInvocationTraceContext(t *testing.T) {
 		_ = wsjson.Write(ctx, ws, invocationFrame{Type: "ready"})
 		send := func(id, session, trace string) {
 			// Use wire JSON so the regression fails behaviorally before the SDK field exists.
-			req := map[string]any{"id": id, "session_id": session, "purpose": PurposePlayground, "messages": []InvocationMessage{{Role: "user", Content: trace}}, "deadline": time.Now().Add(time.Minute)}
+			session = "eval:run:" + session
+			req := map[string]any{"id": id, "session_id": session, "run_id": "run", "scenario_plan": map[string]any{"id": id, "session_id": session, "step_id": id, "overrides": []any{}}, "purpose": PurposeEval, "messages": []InvocationMessage{{Role: "user", Content: trace}}, "deadline": time.Now().Add(time.Minute)}
 			if trace != "" {
 				req["traceparent"] = trace
 			}
@@ -70,6 +72,35 @@ func TestInvocationTraceContext(t *testing.T) {
 			var f invocationFrame
 			if err := wsjson.Read(ctx, ws, &f); err != nil || f.Type != "completed" {
 				t.Errorf("completion: %+v, %v", f, err)
+			}
+			snapshot := f.ScenarioSnapshot
+			want := ""
+			if f.ID == first+"id" || f.ID == "parallel-one" {
+				want = strings.Split(first, "-")[1]
+			}
+			if f.ID == second+"id" || f.ID == "parallel-two" {
+				want = strings.Split(second, "-")[1]
+			}
+			got, _ := snapshot["trace_id"].(string)
+			if want == "" && snapshot["trace_id"] != nil {
+				t.Errorf("unavailable trace must be omitted: %+v", snapshot)
+			}
+			if got != want {
+				t.Errorf("%s snapshot trace = %q, want %q", f.ID, got, want)
+			}
+			if snapshot["plan_id"] != f.ID || snapshot["step_id"] != f.ID || snapshot["complete"] != true {
+				t.Errorf("snapshot scope: %+v", snapshot)
+			}
+			events, _ := snapshot["events"].([]any)
+			if len(events) == 0 {
+				t.Error("missing scenario events")
+			}
+			for _, raw := range events {
+				event := raw.(map[string]any)
+				got, _ := event["trace_id"].(string)
+				if got != want {
+					t.Errorf("event trace = %q, want %q", got, want)
+				}
 			}
 		}
 		for _, tc := range cases {
@@ -111,7 +142,8 @@ func TestInvocationTraceContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer g.Close()
-	c, err := g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, MaxConcurrentInvocations: 2, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, _ InvocationWriter) error {
+	g.simCtl = simulation.New("test")
+	c, err := g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposeEval}, MaxConcurrentInvocations: 2, AllowInsecureLoopback: true}, func(ctx context.Context, r InvocationRequest, _ InvocationWriter) error {
 		if strings.HasPrefix(r.ID, "parallel-") {
 			entered.Done()
 			select {

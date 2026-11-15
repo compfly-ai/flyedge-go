@@ -6,9 +6,11 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +28,8 @@ func TestInvocationLiveToolScenarios(t *testing.T) {
 		active, baseline                 bool
 		run, overrides, extra, wantError string
 		deny                             bool
+		preLLM                           bool
+		handlerErr                       error
 	}{
 		{name: "inactive without plan", run: "run"},
 		{name: "inactive observation", run: "run", overrides: `[]`},
@@ -37,6 +41,9 @@ func TestInvocationLiveToolScenarios(t *testing.T) {
 		{name: "wrong run denied", active: true, run: "other", overrides: `[]`, wantError: "active simulation belongs to another run"},
 		{name: "attack mode denied", active: true, run: "run", overrides: `[]`, extra: `{"attack_injector":{"mode":"attack"}}`, wantError: "simulation hooks require explicit permission"},
 		{name: "global mock denied", active: true, run: "run", overrides: `[]`, extra: `{"scenario_overrides":{"id":"global","session_id":"eval:run:s","step_id":"ask","overrides":[{"id":"r","tool":"read","occurrence":1,"arguments":{},"value":"mock","required_matches":1}]}}`, wantError: "simulation hooks require explicit permission"},
+		{name: "ordinary handler failure", run: "run", overrides: `[]`, handlerErr: errors.New("provider unavailable"), wantError: "provider unavailable"},
+		{name: "infrastructure denial", run: "run", overrides: `[]`, handlerErr: &DenyError{Decision: Decision{Action: ActionDeny, Reason: "enforcement_unavailable"}}, wantError: "enforcement_unavailable"},
+		{name: "pre-LLM denial retained", active: true, run: "run", overrides: `[]`, deny: true, preLLM: true, wantError: `{"version":1,"code":"policy_denied","message":"Use an approved tool."}`},
 		{name: "policy denial retained", active: true, run: "run", overrides: `[]`, deny: true, wantError: `{"version":1,"code":"policy_denied","message":"Use an approved tool."}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -73,7 +80,7 @@ func TestInvocationLiveToolScenarios(t *testing.T) {
 			der, _ := x509.MarshalPKCS8PrivateKey(priv)
 			checker := &mediaChecker{decision: Decision{Action: ActionAllow}}
 			if tc.deny {
-				checker.decision = Decision{Action: ActionDeny, Reason: "policy denied", Message: "Use an approved tool."}
+				checker.decision = Decision{Action: ActionDeny, Reason: "policy denied", Message: "Use an approved tool.", PolicyVersion: "policy-v1", RequestID: "check-1"}
 			}
 			g, err := New(Config{APIURL: broker.URL, DID: "did:compfly:org:agent", KeyPEM: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})}, WithEnforcer(checker))
 			if err != nil {
@@ -89,6 +96,13 @@ func TestInvocationLiveToolScenarios(t *testing.T) {
 			}
 			allow := false
 			_, err = g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposeEval}, AllowInsecureLoopback: true, AllowSimulationInjection: &allow}, func(ctx context.Context, r InvocationRequest, _ InvocationWriter) error {
+				if tc.handlerErr != nil {
+					return tc.handlerErr
+				}
+				if tc.preLLM {
+					_, err := g.Check(ctx, CheckRequest{SessionID: r.SessionID, Stage: StagePreLLM})
+					return fmt.Errorf("model: %w", err)
+				}
 				if _, err := g.CheckToolCall(ctx, r.SessionID, "read", map[string]any{}); err != nil {
 					return err
 				}
@@ -114,6 +128,40 @@ func TestInvocationLiveToolScenarios(t *testing.T) {
 				if tc.wantError != "" {
 					if f.Type != "failed" || !strings.Contains(f.Error, tc.wantError) {
 						t.Fatalf("expected %q; got %+v", tc.wantError, f)
+					}
+					if tc.handlerErr != nil {
+						if f.ScenarioSnapshot["handler_outcome"] != nil || f.ScenarioSnapshot["handler_success"] != false || f.ScenarioSnapshot["complete"] != true {
+							t.Fatalf("ordinary error evidence: %+v", f.ScenarioSnapshot)
+						}
+					}
+					if tc.deny {
+						if f.ScenarioSnapshot["error"] != nil || f.ScenarioSnapshot["handler_outcome"] != "policy_denied" || f.ScenarioSnapshot["handler_success"] != false || f.ScenarioSnapshot["complete"] != true {
+							t.Fatalf("denial evidence: %+v", f.ScenarioSnapshot)
+						}
+						found := false
+						for _, raw := range f.ScenarioSnapshot["events"].([]any) {
+							ev := raw.(map[string]any)
+							if ev["event"] == "policy.decision" {
+								want := map[string]any{"action": "deny", "reason": "policy denied", "message": "Use an approved tool.", "policy_version": "policy-v1", "request_id": "check-1"}
+								if !reflect.DeepEqual(ev["outcome"], want) {
+									t.Fatalf("policy outcome = %#v, want %#v", ev["outcome"], want)
+								}
+								component, stage := "tool", "tool_call"
+								if tc.preLLM {
+									component, stage = "llm", "pre_llm"
+								}
+								if ev["component"] != component || ev["stage"] != stage {
+									t.Fatalf("policy stage: %+v", ev)
+								}
+								found = true
+							}
+						}
+						if f.ScenarioSnapshot["policy_decisions_supported"] != true {
+							t.Fatal("missing policy evidence capability")
+						}
+						if !found {
+							t.Fatal("missing policy decision evidence")
+						}
 					}
 				} else {
 					if f.Type != "completed" {

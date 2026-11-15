@@ -439,7 +439,7 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 			if r.err != nil {
 				f.Type = "failed"
 				f.Error = r.err.Error()
-				if denial, ok := AsDenyError(r.err); ok {
+				if denial, ok := invocationPolicyDenial(r.err); ok {
 					payload, _ := json.Marshal(struct {
 						Version int    `json:"version"`
 						Code    string `json:"code"`
@@ -560,8 +560,10 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 				active[r.ID] = activeWork{stop, r.SessionID}
 				sessions[r.SessionID] = true
 				work = ContextWithSession(work, r.SessionID)
+				invocationTraceID := ""
 				if m := inboundTrace.FindStringSubmatch(r.Traceparent); m != nil && m[1] == "00" && m[2] != strings.Repeat("0", 32) && m[3] != strings.Repeat("0", 16) {
 					work = ContextWithTrace(work, m[2], m[3])
+					invocationTraceID = m[2]
 				}
 				work = context.WithValue(work, invocationContextKey{}, invocationScope{r.RunID, *o.AllowSimulationInjection})
 				out := &invocationOutput{c: c, id: r.ID}
@@ -587,6 +589,16 @@ func (c *InvocationConnection) serve(g *Guard, o InvocationOptions, h Invocation
 						snapshot = g.simCtl.EndExecution(req.SessionID)
 						if snapshot != nil {
 							snapshot["handler_success"] = err == nil
+							snapshot["policy_decisions_supported"] = true
+							if _, denied := invocationPolicyDenial(err); denied {
+								snapshot["handler_outcome"] = "policy_denied"
+							}
+							if invocationTraceID != "" {
+								snapshot["trace_id"] = invocationTraceID
+								for _, raw := range snapshot["events"].([]any) {
+									raw.(map[string]any)["trace_id"] = invocationTraceID
+								}
+							}
 						}
 					} else if g.simCtl != nil {
 						g.simCtl.FinishScenario(req.RunID, req.SessionID, planID, err == nil)
@@ -641,4 +653,18 @@ func scenarioPlanRequiresInjection(raw json.RawMessage) bool {
 		}
 	}
 	return false
+}
+
+// Infrastructure and admission failures are not completed policy evaluations.
+// An omitted action preserves compatibility with callers constructing DenyError directly.
+func invocationPolicyDenial(err error) (*DenyError, bool) {
+	denial, ok := AsDenyError(err)
+	if !ok || denial == nil || len(denial.Decision.Kills) > 0 || (denial.Decision.Action != "" && denial.Decision.Action != ActionDeny) {
+		return nil, false
+	}
+	switch denial.Decision.Reason {
+	case "enforcement_unavailable", "remote_simulation_not_authorized", "kill_switch", "indeterminate":
+		return nil, false
+	}
+	return denial, true
 }
