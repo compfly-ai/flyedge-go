@@ -1,53 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2025-2026 CompFly AI
 
-// Command reference-agent is the complete flyedge-go integration surface in one runnable
-// service — the shape of a production governed agent, distilled from CompFly's internal reference
-// agent (a governed multi-tool concierge) with its extra protocol layers stripped away. It wires
-// EVERYTHING the SDK offers, in the three shapes a real agent runs in: an interactive chat REPL, a
-// scripted one-off (-input), and an OpenAI-compatible HTTP endpoint (-serve) the CompFly playground
-// and simulation engine can drive.
-//
-// The full integration surface:
-//
-//   - Guard construction from env (flyedge.LoadEnv) — explicit, no globals.
-//   - Connect: publish the agent manifest (framework, models, tools) and start the config
-//     heartbeat, so the platform sees the agent online and can flip its model mode at runtime
-//     (surfaced via WithModeChangeHandler).
-//   - Local controls: SyncLocalControls pulls the org's client-evaluable rule set and keeps it
-//     current — in-process denials that still work when the gateway is unreachable. Local
-//     evaluation only ever ADDS a deny; the gateway stays authoritative for what it allows.
-//   - pre_llm + post_llm: ONE governed http.Client (WrapRoundTripper + WithResponseCheck)
-//     installed into every model SDK — the same wrap governs both providers here.
-//   - tool_call: CheckToolCall gates every tool BEFORE it executes. Denials and kill switches are
-//     typed errors, fed back to the model as tool results so the agent adapts instead of crashing.
-//   - tool_call_response: GovernToolResult governs a tool's output before it re-enters the model's
-//     context — the redaction/injection seam.
-//   - On-behalf-of identity: ContextWithPrincipal attributes every governed call in a turn (model
-//     round-trips AND tool checks) to the end user the agent is acting for, so one agent identity
-//     is governed per-user — a policy can key on obo.scope.plan ("free → deny payments"). The HTTP
-//     endpoint selects the principal per request from the X-CompFly-On-Behalf-Of header.
-//   - Sessions: ContextWithSession ties a turn's model calls and tool checks together.
-//   - A provider/model picker: multi-provider (Anthropic | OpenAI | Gemini) behind one
-//     provider-neutral tool loop, with a live model menu fetched from the chosen provider.
-//   - The protection report at exit.
-//
-// Run (see README.md for the full walkthrough):
-//
-//	export ANTHROPIC_API_KEY=...  # and/or OPENAI_API_KEY / GEMINI_API_KEY
-//	export COMPFLY_API_URL=https://prism.p.compfly.ai   # the SDK default when unset
-//	export COMPFLY_AGENT_DID=did:compfly:...
-//	export COMPFLY_AGENT_PRIVATE_KEY_PATH=/path/to/agent.pem
-//	export FLYEDGE_MODE=enforce                     # optional; this example defaults to enforce
-//	go run ./reference-agent/                       # interactive chat (prompts provider + model)
-//	go run ./reference-agent/ -user bob -input "send $40 to dana@example.com"
-//	go run ./reference-agent/ -serve                # OpenAI-compatible endpoint on :8900
-//
-// OTEL=1 additionally exports each guard decision as a flyedge.check OpenTelemetry span to stdout.
-//
-// Without COMPFLY_* set the agent still runs: checks fail open (recorded, not enforced) and
-// Connect/local-control sync report themselves unavailable — the same graceful degradation a
-// production agent needs.
+// Command reference-agent serves a governed concierge through standard outbound
+// reverse invocation. Optional -cli, -input and -serve entry points reuse its loop.
+// Caller state is untrusted context; identity stays application-owned. Historical
+// tool records are converted into provider messages, never re-executed. Tools run
+// policy -> before-tool mock/live execution -> result governance, with execution
+// telemetry only for real calls. See README.md for setup and scenario verification.
 package main
 
 import (
@@ -59,8 +18,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -89,7 +50,8 @@ func run() error {
 	providerName := flag.String("provider", envOr("LLM_PROVIDER", ""), "llm provider: anthropic|openai|gemini (default: auto-detect from the key that is set)")
 	model := flag.String("model", envOr("MODEL", ""), "model id (default: the provider's default)")
 	input := flag.String("input", "", "run a single message and exit (no REPL)")
-	serve := flag.Bool("serve", false, "run the OpenAI-compatible HTTP endpoint instead of the CLI")
+	serve := flag.Bool("serve", false, "run the optional OpenAI-compatible HTTP endpoint")
+	cli := flag.Bool("cli", false, "run terminal chat instead of standard reverse invocation")
 	addr := flag.String("addr", envOr("AGENT_ADDR", ":8900"), "listen address for -serve")
 	flag.Parse()
 
@@ -98,7 +60,8 @@ func run() error {
 		return fmt.Errorf("unknown user %q (try: alice, bob)", *userID)
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// Optional: export guard decisions as OpenTelemetry spans to stdout (OTEL=1).
 	telOpt, shutdownTel := setupTelemetry()
@@ -110,6 +73,9 @@ func run() error {
 	//    integration); this example exists to show enforcement, so it defaults to enforce —
 	//    FLYEDGE_MODE in the environment still wins.
 	cfg := flyedge.LoadEnv()
+	if os.Getenv("FLYEDGE_FAIL_MODE") == "" {
+		cfg.FailMode = flyedge.FailClosed
+	}
 	if os.Getenv("FLYEDGE_MODE") == "" {
 		cfg.Mode = flyedge.ModeEnforce
 	}
@@ -156,7 +122,7 @@ func run() error {
 			explicitModel = true
 		}
 	})
-	if *input == "" && isInteractive() && (!explicitProvider || !explicitModel) {
+	if *cli && *input == "" && isInteractive() && (!explicitProvider || !explicitModel) {
 		*providerName, *model = pickProviderAndModel(ctx, hc, *providerName, explicitProvider, explicitModel)
 	}
 
@@ -173,16 +139,14 @@ func run() error {
 	}
 	fmt.Fprintln(os.Stderr, "ok")
 
-	// 4. Connect: publish the manifest (now that the real model + tools are known) and start
-	//    presence/config polling. Best-effort — a local run without a reachable gateway still works
-	//    as an ungoverned/observe agent.
+	// 4. Register the manifest before serving. Registration failure is a startup failure.
 	if err := guard.Connect(ctx, flyedge.ManifestInfo{
 		Framework:   "reference-agent",
-		Environment: envOr("COMPFLY_ENVIRONMENT", "prod"),
+		Environment: envOr("COMPFLY_ENVIRONMENT", "dev"),
 		Models:      []string{a.provider.Model()},
 		Tools:       toolNames(),
 	}); err != nil {
-		gov(yellow, "⚙  Connect failed (%v) — running with fail-open checks", err)
+		return fmt.Errorf("register agent: %w", err)
 	}
 
 	fmt.Println()
@@ -194,8 +158,10 @@ func run() error {
 		err = serveHTTP(ctx, a, u, *addr)
 	case *input != "":
 		err = runOnce(ctx, a, u, *input)
-	default:
+	case *cli:
 		err = chatLoop(ctx, a, u)
+	default:
+		err = serveReverse(ctx, a, u, envOr("COMPFLY_ENVIRONMENT", "dev"))
 	}
 	if err != nil {
 		return err

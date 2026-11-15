@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -25,5 +26,12 @@ func TestOrderFromState(t *testing.T) {
 		if (err != nil) != tc.invalid || id != tc.id || status != tc.status {
 			t.Fatalf("%s: %q %q %v", tc.raw, id, status, err)
 		}
+	}
+}
+
+func TestReplyUsesMockedStatus(t *testing.T) {
+	reply, err := orderReply("DEMO-42", `{"order_id":"DEMO-42","status":"delayed"}`)
+	if err != nil || !strings.Contains(reply, "is delayed") || strings.Contains(reply, "is shipped") {
+		t.Fatalf("%q %v", reply, err)
 	}
 }

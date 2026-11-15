@@ -907,6 +907,7 @@ func AsKillSwitchError(err error) (*KillSwitchError, bool)
 | `flyedge-go/enforce` | The `Enforcer` interface, `Decision`, `KillInfo`, and prism client |
 | `flyedge-go/telemetry` | `Telemetry` interface + `Noop` / `Batched` / `Summary` |
 | `flyedge-go/telemetry/otel` | OpenTelemetry sink (`feotel.New`) |
+| `flyedge-go/langchaingo` | Invocation conversation to langchaingo messages (`Messages`) |
 
 ---
 

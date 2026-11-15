@@ -124,6 +124,9 @@ func invocationCapacityFixture(t *testing.T, duration time.Duration, autoRenew *
 			}
 			return nil
 		}
+		if failure, ok := invocationDenialCases[r.Messages[0].Content]; ok {
+			return failure.err
+		}
 		if r.Messages[0].Content == "wait" {
 			<-ctx.Done()
 			return ctx.Err()
@@ -508,5 +511,58 @@ func TestInvocationInjectionDefaultAndOptOut(t *testing.T) {
 		if wire.Enabled != enabled {
 			t.Fatal("registration permission disagrees with local enforcement")
 		}
+	}
+}
+
+var invocationDenialCases = map[string]struct {
+	err     error
+	message string
+	policy  bool
+}{
+	"denial":                  {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "internal reason", Message: "Use an approved request."}}, "Use an approved request.", true},
+	"wrapped denial":          {fmt.Errorf("handler: %w", &DenyError{Decision: Decision{Message: "Do not send \"secrets\".\nTry again safely. ✓"}}), "Do not send \"secrets\".\nTry again safely. ✓", true},
+	"empty denial":            {&DenyError{Decision: Decision{Reason: "private reason"}}, "", true},
+	"enforcement unavailable": {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "enforcement_unavailable"}}, "flyedge: denied: enforcement_unavailable", false},
+	"admission failure":       {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "remote_simulation_not_authorized"}}, "flyedge: denied: remote_simulation_not_authorized", false},
+	"indeterminate denial":    {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "indeterminate"}}, "flyedge: denied: indeterminate", false},
+	"kill decision":           {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "kill_switch"}}, "flyedge: denied: kill_switch", false},
+	"scoped kill":             {&DenyError{Decision: Decision{Action: ActionDeny, Reason: "operator stop", Kills: []KillInfo{{Reason: "operator stop"}}}}, "flyedge: denied: operator stop", false},
+	"ordinary error":          {errors.New("provider unavailable"), "provider unavailable", false},
+	"denial lookalike":        {errors.New("flyedge: denied: internal reason"), "flyedge: denied: internal reason", false},
+	"kill switch":             {&KillSwitchError{Kills: []KillInfo{{Reason: "operator stop"}}}, "flyedge: kill switch active: operator stop", false},
+}
+
+func TestInvocationPolicyDenialFailure(t *testing.T) {
+	for name, tc := range invocationDenialCases {
+		t.Run(name, func(t *testing.T) {
+			_, c := invocationFixture(t, func(ctx context.Context, ws *websocket.Conn) {
+				sendInvocation(ctx, ws, "denied", name, PurposePlayground)
+				var frame invocationFrame
+				if err := wsjson.Read(ctx, ws, &frame); err != nil {
+					t.Error(err)
+					return
+				}
+				if frame.Type != "failed" || frame.ID != "denied" {
+					t.Errorf("unexpected frame: %+v", frame)
+				}
+				if tc.policy {
+					var got map[string]any
+					if err := json.Unmarshal([]byte(frame.Error), &got); err != nil {
+						t.Errorf("policy failure is not JSON: %q: %v", frame.Error, err)
+					}
+					want := map[string]any{"version": float64(1), "code": "policy_denied", "message": tc.message}
+					if !reflect.DeepEqual(got, want) {
+						t.Errorf("failure = %#v, want %#v", got, want)
+					}
+				} else if frame.Error != tc.message {
+					t.Errorf("failure = %q, want %q", frame.Error, tc.message)
+				}
+				_ = wsjson.Write(ctx, ws, invocationFrame{Type: "revoked"})
+				_, _, _ = ws.Read(ctx)
+			})
+			if !errors.Is(c.Wait(), ErrConnectionRevoked) {
+				t.Fatal(c.Wait())
+			}
+		})
 	}
 }

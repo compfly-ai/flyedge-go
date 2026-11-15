@@ -14,6 +14,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
+	flyedge "github.com/compfly-ai/flyedge-go"
 	"github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"google.golang.org/genai"
@@ -31,7 +32,7 @@ type toolExec func(ctx context.Context, name string, args json.RawMessage) (resu
 type provider interface {
 	Name() string
 	Model() string
-	Run(ctx context.Context, system, user string, tools []toolDef, exec toolExec) (text string, steps []step, err error)
+	Run(ctx context.Context, system string, conversation []flyedge.InvocationMessage, tools []toolDef, exec toolExec) (text string, steps []step, err error)
 	// ListModels returns the model ids this provider's key can currently use — for the startup
 	// picker's model menu. A metadata-only call (no completion tokens spent).
 	ListModels(ctx context.Context) ([]string, error)
@@ -126,7 +127,7 @@ type anthropicProvider struct {
 func (p *anthropicProvider) Name() string  { return "anthropic" }
 func (p *anthropicProvider) Model() string { return p.model }
 
-func (p *anthropicProvider) Run(ctx context.Context, system, user string, tools []toolDef, exec toolExec) (string, []step, error) {
+func (p *anthropicProvider) Run(ctx context.Context, system string, conversation []flyedge.InvocationMessage, tools []toolDef, exec toolExec) (string, []step, error) {
 	tps := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for _, t := range tools {
 		tps = append(tps, anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
@@ -135,7 +136,10 @@ func (p *anthropicProvider) Run(ctx context.Context, system, user string, tools 
 			InputSchema: anthropic.ToolInputSchemaParam{Properties: t.properties, Required: t.required},
 		}})
 	}
-	msgs := []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(user))}
+	msgs, err := anthropicConversation(conversation)
+	if err != nil {
+		return "", nil, err
+	}
 	var steps []step
 	var text string
 	for turn := 0; turn < maxTurns; turn++ {
@@ -200,7 +204,7 @@ type openaiProvider struct {
 func (p *openaiProvider) Name() string  { return "openai" }
 func (p *openaiProvider) Model() string { return p.model }
 
-func (p *openaiProvider) Run(ctx context.Context, system, user string, tools []toolDef, exec toolExec) (string, []step, error) {
+func (p *openaiProvider) Run(ctx context.Context, system string, conversation []flyedge.InvocationMessage, tools []toolDef, exec toolExec) (string, []step, error) {
 	tps := make([]openai.ChatCompletionToolParam, 0, len(tools))
 	for _, t := range tools {
 		params := openai.FunctionParameters{"type": "object", "properties": t.properties}
@@ -213,7 +217,10 @@ func (p *openaiProvider) Run(ctx context.Context, system, user string, tools []t
 			Parameters:  params,
 		}})
 	}
-	msgs := []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(system), openai.UserMessage(user)}
+	msgs, err := openaiConversation(system, conversation)
+	if err != nil {
+		return "", nil, err
+	}
 	var steps []step
 	var text string
 	for turn := 0; turn < maxTurns; turn++ {
@@ -293,7 +300,7 @@ type geminiProvider struct {
 func (p *geminiProvider) Name() string  { return "gemini" }
 func (p *geminiProvider) Model() string { return p.model }
 
-func (p *geminiProvider) Run(ctx context.Context, system, user string, tools []toolDef, exec toolExec) (string, []step, error) {
+func (p *geminiProvider) Run(ctx context.Context, system string, conversation []flyedge.InvocationMessage, tools []toolDef, exec toolExec) (string, []step, error) {
 	var gTools []*genai.Tool
 	if len(tools) > 0 {
 		decls := make([]*genai.FunctionDeclaration, 0, len(tools))
@@ -315,7 +322,10 @@ func (p *geminiProvider) Run(ctx context.Context, system, user string, tools []t
 		SystemInstruction: &genai.Content{Parts: []*genai.Part{genai.NewPartFromText(system)}},
 		Tools:             gTools,
 	}
-	contents := []*genai.Content{genai.NewContentFromText(user, genai.RoleUser)}
+	contents, err := geminiConversation(conversation)
+	if err != nil {
+		return "", nil, err
+	}
 
 	var steps []step
 	var text string

@@ -63,6 +63,11 @@ Map these records to the framework's message types as prior conversation context
 do not execute the recorded tool calls again. This is history injection, not
 automatic restoration of framework memory or checkpoints.
 
+For langchaingo, the separate `github.com/compfly-ai/flyedge-go/langchaingo` module
+does this mapping. `Messages(request)` returns `History` followed by `Messages` as
+`[]llms.MessageContent` for `GenerateContent`. Pass the whole conversation, not only
+the latest user message, or follow-up turns lose their context.
+
 ## Concurrent reverse invocations
 
 `InvocationOptions.MaxConcurrentInvocations` defaults to 1 (zero selects that
@@ -78,3 +83,18 @@ mock counters and evidence are not stored in the agent-wide simulation plan.
 Completion carries `scenario_snapshot` with `handler_success`. Mock permission
 still requires `AllowSimulationInjection` and the application's tool hook opt-in.
 Platform scheduling must negotiate this capability before sending inline plans.
+
+Invocation snapshots and their events include `trace_id` when the invocation supplies
+valid W3C trace context. It identifies that turn; `session_id`, `plan_id`, and
+`step_id` keep their existing meanings. Missing or malformed trace context leaves
+`trace_id` absent, and older snapshots without it remain valid.
+
+A returned SDK policy denial (including wrapped errors) keeps its final snapshot
+with `handler_success: false` and `handler_outcome: "policy_denied"`. The failed
+wire frame retains the structured policy denial message. `complete` still measures
+fixture/evidence completeness; it does not become true merely because policy
+blocked the request. Snapshots advertise `policy_decisions_supported: true`. Actual checks contribute
+`policy.decision` events with `outcome.action` and `outcome.reason`, plus the actual
+message, policy version, and request ID when available, including
+pre-model denials where no tool ran. Infrastructure, cancellation, panic, and other
+handler failures do not receive the policy outcome.

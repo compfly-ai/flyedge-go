@@ -170,6 +170,16 @@ func (e *HTTPEnforcer) GetSigned(ctx context.Context, path string, headers map[s
 // is right for endpoints where 304 is meaningless — this variant exists for poll endpoints that
 // send If-None-Match and want "nothing changed" as an ordinary outcome, not an error to swallow.
 func (e *HTTPEnforcer) GetSignedConditional(ctx context.Context, path string, headers map[string]string) ([]byte, bool, error) {
+	return e.GetSignedConditionalWithLimit(ctx, path, headers, 1<<20)
+}
+
+// GetSignedConditionalWithLimit uses an explicit response budget for larger artifacts.
+// Oversized or incomplete responses are errors, never truncated successful results.
+func (e *HTTPEnforcer) GetSignedConditionalWithLimit(ctx context.Context, path string, headers map[string]string, maxBytes int64) ([]byte, bool, error) {
+	if maxBytes <= 0 {
+		return nil, false, fmt.Errorf("enforce: response limit must be positive")
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+path, nil)
 	if err != nil {
 		return nil, false, err
@@ -195,7 +205,13 @@ func (e *HTTPEnforcer) GetSignedConditional(ctx context.Context, path string, he
 	if resp.StatusCode == http.StatusNotModified {
 		return nil, true, nil
 	}
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, false, fmt.Errorf("enforce: read %s: %w", path, err)
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, false, fmt.Errorf("enforce: %s response exceeds %d bytes", path, maxBytes)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, false, fmt.Errorf("enforce: %s → %d: %s", path, resp.StatusCode, string(raw))
 	}
