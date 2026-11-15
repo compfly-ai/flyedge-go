@@ -20,6 +20,8 @@ import (
 // Keep it separate from Chat Completions so endpoint recognition cannot select
 // the old choices/messages extractors by accident.
 func (t *guardRoundTripper) roundTripResponses(req *http.Request) (*http.Response, error) {
+	// Caller routing hints must not reach a provider or override SDK preference.
+	req.Header.Del("X-CompFly-Model-Mode")
 	if req.Body == nil {
 		return nil, fmt.Errorf("Responses request body is required")
 	}
@@ -58,7 +60,7 @@ func (t *guardRoundTripper) roundTripResponses(req *http.Request) (*http.Respons
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(requestBody)), nil }
 	// Prism owns the model gates in proxy/gateway mode. Requires the paired
 	// Responses-capable Prism deployment; no duplicate out-of-band checks.
-	if t.guard.cfg.ProxyMode || t.guard.ModelMode() != ModelModeCheck {
+	if t.guard.ModelMode() != ModelModeCheck {
 		for key, value := range enforce.IdentityHeaders(req.Context()) {
 			req.Header.Set(key, value)
 		}

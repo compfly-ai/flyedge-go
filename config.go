@@ -56,7 +56,10 @@ type Config struct {
 	// Mode + FailMode; empty values default to ModeWarn / FailOpen in New.
 	Mode     Mode
 	FailMode FailMode
-	// ProxyMode routes wrapped LLM traffic through prism /v1/proxy (M2). Off = check-only.
+	// ModelMode optionally selects check, passthrough, or gateway (FLYEDGE_MODEL_MODE).
+	// Empty inherits server policy. Explicit per-agent server policy takes precedence.
+	ModelMode ModelMode
+	// ProxyMode is the legacy explicit proxy opt-in. Prefer ModelMode for new code.
 	ProxyMode bool
 	// Timeout bounds each enforcement HTTP call. Zero → 30s.
 	Timeout time.Duration
@@ -75,6 +78,7 @@ func LoadEnv() Config {
 		DID:             os.Getenv("COMPFLY_AGENT_DID"),
 		KeyPEMPath:      os.Getenv("COMPFLY_AGENT_PRIVATE_KEY_PATH"),
 		Mode:            Mode(os.Getenv("FLYEDGE_MODE")),
+		ModelMode:       ModelMode(os.Getenv("FLYEDGE_MODEL_MODE")),
 		FailMode:        FailMode(os.Getenv("FLYEDGE_FAIL_MODE")),
 		SimTelemetryURL: os.Getenv("COMPFLY_SIM_TELEMETRY_URL"),
 	}

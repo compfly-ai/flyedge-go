@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -114,6 +115,7 @@ type Guard struct {
 	manifestInfo       ManifestInfo
 	manifestHash       string
 	modelMode          ModelMode
+	modelModeSource    string
 	nontextAllowed     bool
 	nontextAlways      bool // WithAttachments: set once at construction
 	nontextDID         string
@@ -150,6 +152,9 @@ type Guard struct {
 // guard runs check-only/unsigned (useful for tests/offline). Returns an error on invalid config —
 // it never silently degrades. Importing this package has no side effects; nothing starts until New.
 func New(cfg Config, opts ...Option) (*Guard, error) {
+	if cfg.ModelMode != "" && !validModelMode(cfg.ModelMode) {
+		return nil, fmt.Errorf("flyedge: invalid ModelMode %q: expected check, passthrough, or gateway", cfg.ModelMode)
+	}
 	if cfg.cloudTelemetryEnvError != nil && cfg.CloudTelemetry == nil {
 		return nil, cfg.cloudTelemetryEnvError
 	}

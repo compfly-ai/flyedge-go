@@ -89,8 +89,8 @@ func WithHeartbeat(interval time.Duration) Option {
 	return func(g *Guard) error { g.pollInterval = interval; return nil }
 }
 
-// WithModeChangeHandler registers a callback fired when the poller observes a change to the agent's
-// model_mode (check/passthrough/gateway). Useful for logging or reacting to a mode flip.
+// WithModeChangeHandler observes effective routing changes from connect, reconnect,
+// and heartbeat updates. The handler must be concurrency-safe.
 func WithModeChangeHandler(fn func(old, cur ModelMode)) Option {
 	return func(g *Guard) error { g.onModeChange = fn; return nil }
 }

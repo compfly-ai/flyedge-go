@@ -401,6 +401,7 @@ func TestResponsesProxyRoutesWithoutDuplicateChecks(t *testing.T) {
 			e := &responsesEnforcer{}
 			g := responsesGuard(t, Config{APIURL: "https://prism.example", ProxyMode: mode == ModelModeCheck}, e)
 			g.modelMode = mode
+			g.modelModeSource = "org_default"
 			base := responsesRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if req.URL.String() != "https://prism.example/v1/proxy" || req.Header.Get("X-Destination") != "https://api.openai.com/v1/responses" {
 					t.Fatalf("wrong proxy route: %s %v", req.URL, req.Header)
