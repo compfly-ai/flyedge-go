@@ -117,13 +117,11 @@ func (g *Guard) connectOnce(ctx context.Context) error {
 	_ = json.Unmarshal(raw, &cr) // response parse is best-effort — a 200 already means accepted.
 	g.pollMu.Lock()
 	g.manifestHash = m.ManifestHash
-	if cr.ModelMode != nil {
-		g.modelMode = ModelMode(*cr.ModelMode)
-	}
 	if g.pollInterval <= 0 && cr.HeartbeatIntervalSeconds > 0 {
 		g.pollInterval = time.Duration(cr.HeartbeatIntervalSeconds) * time.Second
 	}
 	g.pollMu.Unlock()
+	g.applyModelMode(cr.ModelMode, cr.ModelModeSource)
 	return nil
 }
 

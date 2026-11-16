@@ -109,6 +109,9 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		return t.base.RoundTrip(req) // not a known LLM call — pass through
 	}
 
+	// This reserved routing hint belongs only on SDK-controlled Prism requests.
+	req.Header.Del("X-CompFly-Model-Mode")
+
 	body, err := io.ReadAll(req.Body)
 	_ = req.Body.Close()
 	if err != nil {
@@ -140,7 +143,8 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 			attachments = ExtractAttachments(structured)
 		}
 	}
-	if t.guard.cfg.ProxyMode && len(attachments) == 0 {
+	proxy := t.guard.ModelMode() != ModelModeCheck
+	if proxy && len(attachments) == 0 {
 		return t.proxyForward(req, body)
 	}
 
@@ -160,7 +164,7 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	if err != nil {
 		return nil, err // Deny/*DenyError → the SDK call fails; provider not contacted
 	}
-	if t.guard.cfg.ProxyMode {
+	if proxy {
 		return t.proxyForward(req, body)
 	}
 
@@ -237,6 +241,13 @@ func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.
 	req.Host = prismURL.Host
 	req.Header.Set("X-Destination", dest)
 	req.Header.Set("X-CompFly-Stage", string(StagePreLLM))
+	t.guard.pollMu.RLock()
+	preference := t.guard.modelModePreferenceLocked()
+	t.guard.pollMu.RUnlock()
+	req.Header.Del("X-CompFly-Model-Mode")
+	if preference != "" {
+		req.Header.Set("X-CompFly-Model-Mode", string(preference))
+	}
 	// Session correlation: the same session id this wrap stamps on its /check
 	// telemetry, so prism keys its rows to the real session instead of minting
 	// a fresh id per request. NOTE: a client-provided session id shifts prism's

@@ -89,8 +89,8 @@ func WithHeartbeat(interval time.Duration) Option {
 	return func(g *Guard) error { g.pollInterval = interval; return nil }
 }
 
-// WithModeChangeHandler registers a callback fired when the poller observes a change to the agent's
-// model_mode (check/passthrough/gateway). Useful for logging or reacting to a mode flip.
+// WithModeChangeHandler observes effective routing changes from connect, reconnect,
+// and heartbeat updates. The handler must be concurrency-safe.
 func WithModeChangeHandler(fn func(old, cur ModelMode)) Option {
 	return func(g *Guard) error { g.onModeChange = fn; return nil }
 }
@@ -116,4 +116,12 @@ func WithSimulationTelemetryURL(url string) Option {
 // protection is never bypassed.
 func WithSimulation(enabled bool) Option {
 	return func(g *Guard) error { g.simEnabled = enabled; return nil }
+}
+
+// WithDecisionHandler observes the final decision once per Check, including checks
+// made by the HTTP transport. It does not observe gateway-only ProxyMode decisions.
+// The handler runs synchronously before Check returns and may run concurrently.
+// It must be concurrency-safe and must not mutate the request or decision.
+func WithDecisionHandler(fn func(CheckRequest, Decision)) Option {
+	return func(g *Guard) error { g.onDecision = fn; return nil }
 }

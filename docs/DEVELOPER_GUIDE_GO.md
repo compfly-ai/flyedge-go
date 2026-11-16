@@ -480,8 +480,23 @@ guard, err := flyedge.New(cfg, flyedge.WithSigner(signer))
 given event).
 
 Requests to prism are signed with the agent's key, so the platform can verify
-authenticity. In **proxy mode** (`Config.ProxyMode`), traffic is routed *through*
-the gateway (prism's `/v1/proxy`) rather than checked out-of-band.
+authenticity. `Config.ModelMode` optionally selects `ModelModeCheck`,
+`ModelModePassthrough`, or `ModelModeGateway`; `LoadEnv` reads the same choice from
+`FLYEDGE_MODEL_MODE`. Empty means inherit, and invalid values fail construction.
+The effective order is explicit per-agent platform policy, SDK preference,
+organization default, then check. A server mode without recognized
+`model_mode_source` metadata remains authoritative for compatibility.
+
+Both Chat Completions and Responses route passthrough/gateway traffic through
+Prism's `/v1/proxy`. Explicit SDK preferences travel in `X-CompFly-Model-Mode` on
+proxy requests; inherited modes do not emit this header. Platform policy still
+wins over that preference, and all denial and kill-switch checks remain active.
+The SDK preference survives heartbeat and reconnect updates. Mode-change callbacks
+report effective routing changes, including changes observed on reconnect.
+
+Legacy `Config.ProxyMode: true` retains a non-check server mode or selects
+passthrough when none exists. `Config.ModelMode` supersedes the legacy flag;
+per-agent or older-server modes remain authoritative.
 
 ---
 

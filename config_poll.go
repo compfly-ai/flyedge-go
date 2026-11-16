@@ -18,8 +18,7 @@ import (
 // which the platform pushes dynamic state to a live agent.
 const configPath = "/v1/flyedge/config"
 
-// ModelMode is prism's resolved routing mode for an agent. The poller keeps it current; the
-// transport wrap (later phases) consults it to decide how to route model calls.
+// ModelMode selects direct checked calls, proxy passthrough, or gateway routing.
 type ModelMode string
 
 const (
@@ -53,6 +52,7 @@ type flyedgeConfigResponse struct {
 	ManifestRefreshRequired     *bool             `json:"manifest_refresh_required,omitempty"`
 	HeartbeatIntervalSeconds    *uint32           `json:"heartbeat_interval_seconds,omitempty"`
 	ModelMode                   *string           `json:"model_mode,omitempty"`
+	ModelModeSource             string            `json:"model_mode_source,omitempty"`
 }
 
 // connectResponse is the POST /v1/flyedge/connect body: the heartbeat cadence + initial model mode.
@@ -60,6 +60,7 @@ type connectResponse struct {
 	Accepted                 bool    `json:"accepted"`
 	HeartbeatIntervalSeconds uint32  `json:"heartbeat_interval_seconds"`
 	ModelMode                *string `json:"model_mode,omitempty"`
+	ModelModeSource          string  `json:"model_mode_source,omitempty"`
 }
 
 // signedGetter is the optional enforcer capability the poller needs (a signed GET). The default
@@ -68,14 +69,59 @@ type signedGetter interface {
 	GetSigned(ctx context.Context, path string, headers map[string]string) ([]byte, error)
 }
 
-// ModelMode returns the agent's current routing mode (default ModelModeCheck until the first poll).
+// ModelMode returns the effective routing mode: per-agent policy, explicit SDK
+// preference, organization policy, then check. Older servers without a known
+// policy source remain authoritative.
 func (g *Guard) ModelMode() ModelMode {
 	g.pollMu.RLock()
 	defer g.pollMu.RUnlock()
-	if g.modelMode == "" {
-		return ModelModeCheck
+	return g.effectiveModelModeLocked()
+}
+
+func validModelMode(mode ModelMode) bool {
+	return mode == ModelModeCheck || mode == ModelModePassthrough || mode == ModelModeGateway
+}
+
+func (g *Guard) effectiveModelModeLocked() ModelMode {
+	if validModelMode(g.modelMode) && g.modelModeSource != "org_default" && g.modelModeSource != "fallback" {
+		return g.modelMode
 	}
-	return g.modelMode
+	if preference := g.modelModePreferenceLocked(); preference != "" {
+		return preference
+	}
+	if validModelMode(g.modelMode) {
+		return g.modelMode
+	}
+	return ModelModeCheck
+}
+
+// Only explicit SDK choices travel as a proxy header. Inheritance must not
+// accidentally become a caller override on the gateway.
+func (g *Guard) modelModePreferenceLocked() ModelMode {
+	if g.cfg.ModelMode != "" {
+		return g.cfg.ModelMode
+	}
+	if g.cfg.ProxyMode {
+		if validModelMode(g.modelMode) && g.modelMode != ModelModeCheck {
+			return g.modelMode
+		}
+		return ModelModePassthrough
+	}
+	return ""
+}
+
+func (g *Guard) applyModelMode(mode *string, source string) {
+	if mode == nil || !validModelMode(ModelMode(*mode)) {
+		return
+	}
+	g.pollMu.Lock()
+	old := g.effectiveModelModeLocked()
+	g.modelMode, g.modelModeSource = ModelMode(*mode), source
+	current, cb := g.effectiveModelModeLocked(), g.onModeChange
+	g.pollMu.Unlock()
+	if old != current && cb != nil {
+		cb(old, current)
+	}
 }
 
 // SimulationActive reports whether the last config poll saw an active simulation run.
@@ -183,17 +229,7 @@ func (g *Guard) applyConfig(cr flyedgeConfigResponse) {
 		g.nontextExpires = time.Now().Add(ttl)
 	}
 	g.pollMu.Unlock()
-	if cr.ModelMode != nil {
-		nm := ModelMode(*cr.ModelMode)
-		g.pollMu.Lock()
-		old := g.modelMode
-		g.modelMode = nm
-		cb := g.onModeChange
-		g.pollMu.Unlock()
-		if nm != old && cb != nil {
-			cb(old, nm)
-		}
-	}
+	g.applyModelMode(cr.ModelMode, cr.ModelModeSource)
 
 	simHash := hashSim(cr.Simulation)
 	g.pollMu.Lock()
