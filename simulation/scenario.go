@@ -240,7 +240,7 @@ func (m *scenarioMocks) status() map[string]any {
 	}
 	complete := m.err == ""
 	for _, r := range m.plan.Overrides {
-		if r.enabled() && m.matches[r.ID] != *r.Required {
+		if r.enabled() && m.matches[r.ID] < *r.Required {
 			complete = false
 		}
 	}

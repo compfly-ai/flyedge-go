@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix scenario mock completion: `required_matches: 0` permits an optional mock to be used once without marking evidence incomplete. Required occurrences and unexpected-call rejection are unchanged.
+
 ## 0.10.0
 
 - Recognize Google and Anthropic Vertex generation routes in `WrapRoundTripper`, including URL-derived model IDs, signed proxy forwarding, and publisher-specific response/SSE inspection.
