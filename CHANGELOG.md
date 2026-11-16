@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `Guard.CheckMCPToolCall`, which sends the MCP server endpoint with a tool_call check so MCP provider and domain sanctions apply.
+
 ## 0.10.0
 
 - Recognize Google and Anthropic Vertex generation routes in `WrapRoundTripper`, including URL-derived model IDs, signed proxy forwarding, and publisher-specific response/SSE inspection.
