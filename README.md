@@ -78,7 +78,10 @@ observe final policy decisions, including transport warnings that allow a provid
 request to continue. Read `Decision.Warnings` and `Decision.Message`; an allowed
 decision can carry warnings. The optional callback runs once per `Check`, before
 it returns, and must be concurrency-safe and treat its arguments as read-only.
-Gateway-only proxy decisions do not pass through this callback.
+Explicit proxy policy denials and gateway warning metadata also reach this callback.
+Proxy denials return `*DenyError` with the authored `Decision.Message`; warning
+metadata is delivered before the unchanged provider response, including streams.
+Ordinary provider errors retain their HTTP status and body.
 
 See the [complete developer guide](docs/DEVELOPER_GUIDE_GO.md) for Anthropic, OpenAI,
 Gemini, langchaingo, tool-use loops, identity, telemetry, and production configuration.

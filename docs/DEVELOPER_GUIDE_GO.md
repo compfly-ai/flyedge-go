@@ -928,3 +928,22 @@ func AsKillSwitchError(err error) (*KillSwitchError, bool)
 
 For platform concepts (policies, effective controls, the governance data plane)
 that apply across all SDKs, see the CompFly platform docs.
+
+
+### Proxy policy responses
+
+The governed proxy transport recognizes HTTP 403 with `error.type=policy_denied`
+and a string `error.message` as a `*DenyError`. It preserves the authored message,
+reason and warning identifiers, so reverse invocations report 403 with the refusal
+text. Authentication errors, other statuses and malformed policy envelopes remain
+HTTP responses. Denial inspection is bounded to 64 KiB; larger bodies remain HTTP
+responses. This adds no policy request.
+
+On successful proxy responses, `WithDecisionHandler` receives each valid advisory
+from the gateway-owned `X-CompFly-Policy-Warnings` header, with its stage and
+request session/model context. The standard-base64 JSON header is limited to
+16 KiB encoded; malformed, duplicate or oversized metadata is ignored. Streaming
+response bodies are not consumed to deliver warnings. Direct provider responses
+cannot assert proxy policy metadata. This requires the paired Prism deployment
+that replaces upstream warning headers; streaming post-response warnings are not
+part of this metadata contract.

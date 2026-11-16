@@ -218,7 +218,7 @@ func (t *guardRoundTripper) inspectResponse(req *http.Request, resp *http.Respon
 // proxyForward rewrites an LLM request to route through prism /v1/proxy: the original provider URL
 // goes in X-Destination, the body is DID-signed, and prism enforces inline then forwards to the
 // provider and streams the response back. The provider's own auth headers pass through unchanged.
-// A policy deny surfaces as prism's HTTP error status (the SDK sees it as an API error).
+// Explicit gateway policy denials become DenyError; provider errors retain their HTTP form.
 func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.Response, error) {
 	model := ""
 	if extract := extractorFor(req.URL.Hostname(), req.URL.Path); extract != nil {
@@ -233,6 +233,16 @@ func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.
 		}
 	}
 	dest := req.URL.String()
+	operation := "chat.completions"
+	if strings.HasSuffix(req.URL.Path, "/responses") {
+		operation = "responses"
+	}
+	check := CheckRequest{SessionID: req.Header.Get("X-Session-ID"), Stage: StagePreLLM,
+		ComponentType: "LLM", ComponentName: req.URL.Host, MethodName: "http",
+		Operation: Operation{Type: operation, ModelID: model}}
+	if check.SessionID == "" {
+		check.SessionID = t.resolveSession(req)
+	}
 	prismURL, err := url.Parse(strings.TrimRight(t.guard.cfg.APIURL, "/") + "/v1/proxy")
 	if err != nil {
 		return nil, err
@@ -266,7 +276,11 @@ func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.
 			req.Header.Set(k, v)
 		}
 	}
-	return t.roundTripModel(req, model)
+	resp, err := t.roundTripModel(req, model)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	return t.proxyPolicyResponse(resp, check)
 }
 
 // extractor pulls the latest user message and model from a provider request body.
