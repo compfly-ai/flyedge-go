@@ -119,8 +119,9 @@ func WithSimulation(enabled bool) Option {
 }
 
 // WithDecisionHandler observes the final decision once per Check, including checks
-// made by the HTTP transport. It does not observe gateway-only ProxyMode decisions.
-// The handler runs synchronously before Check returns and may run concurrently.
+// made by the HTTP transport, plus explicit proxy policy denials and warning metadata.
+// Proxy successes without warning metadata do not emit a decision.
+// The handler runs synchronously before Check or the proxy transport returns and may run concurrently.
 // It must be concurrency-safe and must not mutate the request or decision.
 func WithDecisionHandler(fn func(CheckRequest, Decision)) Option {
 	return func(g *Guard) error { g.onDecision = fn; return nil }
