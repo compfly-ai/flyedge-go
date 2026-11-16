@@ -15,6 +15,13 @@ import (
 // CheckToolCall gates a tool invocation (the tool_call stage). Tool arguments are serialized both
 // as inspected content and as structured policy input.
 func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, args any) (Decision, error) {
+	return g.CheckMCPToolCall(ctx, session, toolName, "", args)
+}
+
+// CheckMCPToolCall is CheckToolCall for a tool served by a remote MCP server. serverURL is the
+// server's endpoint: the platform resolves MCP provider and domain sanctions from it, not from
+// the tool name.
+func (g *Guard) CheckMCPToolCall(ctx context.Context, session, toolName, serverURL string, args any) (Decision, error) {
 	return g.Check(ctx, CheckRequest{
 		SessionID:     session,
 		Stage:         StageToolCall,
@@ -22,7 +29,7 @@ func (g *Guard) CheckToolCall(ctx context.Context, session, toolName string, arg
 		ComponentName: toolName,
 		MethodName:    "call",
 		Content:       g.mediaContent(args),
-		Operation:     Operation{Type: "tool.call", ToolName: toolName, ToolArgsJSON: jsonString(policyValue(jsonValue(args), 0))},
+		Operation:     Operation{Type: "tool.call", ToolName: toolName, ToolArgsJSON: jsonString(policyValue(jsonValue(args), 0)), MCPServerID: serverURL},
 	})
 }
 
