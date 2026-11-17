@@ -566,3 +566,77 @@ func TestInvocationPolicyDenialFailure(t *testing.T) {
 		})
 	}
 }
+
+// Exercise the serving loop's production heartbeat settings, not injected test intervals.
+func TestInvocationHeartbeatProductionTiming(t *testing.T) {
+	for _, respond := range []bool{true, false} {
+		t.Run(fmt.Sprintf("respond=%v", respond), func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+			defer cancel()
+			pings := make(chan time.Time, 4)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": strings.Repeat("a", 32), "token": "test-token", "expires_at": time.Now().Add(2 * time.Minute)})
+					return
+				}
+				ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+					OnPingReceived: func(context.Context, []byte) bool { pings <- time.Now(); return respond },
+				})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer ws.CloseNow()
+				_ = wsjson.Write(ctx, ws, invocationFrame{Type: "ready"})
+				_, _, _ = ws.Read(ctx)
+			}))
+			defer server.Close()
+			_, private, _ := ed25519.GenerateKey(nil)
+			der, _ := x509.MarshalPKCS8PrivateKey(private)
+			g, err := New(Config{APIURL: server.URL, DID: "did:compfly:org:agent", KeyPEM: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer g.Close()
+			renew := false
+			started := time.Now()
+			c, err := g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, LeaseDuration: 2 * time.Minute, AutoRenew: &renew, AllowInsecureLoopback: true}, func(context.Context, InvocationRequest, InvocationWriter) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			awaitPing := func(since time.Time) time.Time {
+				t.Helper()
+				select {
+				case at := <-pings:
+					if elapsed := at.Sub(since); elapsed < 9*time.Second || elapsed > 15*time.Second {
+						t.Fatalf("ping interval = %v", elapsed)
+					}
+					return at
+				case <-time.After(15 * time.Second):
+					t.Fatal("no ping within 15 seconds")
+					return time.Time{}
+				}
+			}
+			first := awaitPing(started)
+			if respond {
+				awaitPing(first)
+				return
+			}
+			done := make(chan error, 1)
+			go func() { done <- c.Wait() }()
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrInvocationOutcomeUnknown) {
+					t.Fatalf("missing pong: %v", err)
+				}
+				if elapsed := time.Since(first); elapsed < 29*time.Second || elapsed > 35*time.Second {
+					t.Fatalf("pong timeout = %v", elapsed)
+				}
+			case <-time.After(35 * time.Second):
+				t.Fatal("missing pong did not close connection")
+			}
+		})
+	}
+}
