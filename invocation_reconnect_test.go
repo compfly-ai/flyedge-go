@@ -189,3 +189,116 @@ func waitForActiveLease(t *testing.T, ctx context.Context, conn *InvocationConne
 		}
 	}
 }
+
+func TestInvocationStatusExposesReconnectFailures(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, privateKey, _ := ed25519.GenerateKey(nil)
+	der, _ := x509.MarshalPKCS8PrivateKey(privateKey)
+	var registrations atomic.Int32
+	drop := make(chan struct{})
+	attemptStarted := make(chan struct{})
+	failAttempt := make(chan struct{})
+	firstID, nextID := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case configPath:
+			_, _ = w.Write([]byte(`{}`))
+		case "/v1/flyedge/invocations":
+			n := registrations.Add(1)
+			if n == 2 {
+				close(attemptStarted)
+				select {
+				case <-failAttempt:
+					w.WriteHeader(http.StatusServiceUnavailable)
+				case <-ctx.Done():
+				}
+				return
+			}
+			id := firstID
+			if n > 1 {
+				id = nextID
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "token": id, "expires_at": time.Now().Add(time.Minute)})
+		default:
+			ws, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer ws.CloseNow()
+			_ = wsjson.Write(ctx, ws, invocationFrame{Type: "ready"})
+			if strings.Contains(r.URL.Path, firstID) {
+				select {
+				case <-drop:
+				case <-ctx.Done():
+				}
+				return
+			}
+			_, _, _ = ws.Read(ctx)
+		}
+	}))
+	defer server.Close()
+	g, err := New(Config{APIURL: server.URL, DID: "did:compfly:test:fixture", KeyPEM: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	c, err := g.ServeInvocations(ctx, InvocationOptions{Environment: "dev", Purposes: []InvocationPurpose{PurposePlayground}, AllowInsecureLoopback: true, AllowOperatorReconnect: true}, func(context.Context, InvocationRequest, InvocationWriter) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	initial := c.Status()
+	if initial.State != InvocationConnected || initial.ActiveLeaseID != firstID || !initial.ExpiresAt.After(time.Now()) || initial.ReconnectAttempts != 0 {
+		t.Fatalf("initial status: %+v", initial)
+	}
+	close(drop)
+	waitForActiveLease(t, ctx, c, "")
+	if s := c.Status(); s.State != InvocationDisconnected || !errors.Is(s.LastDisconnectError, ErrInvocationOutcomeUnknown) {
+		t.Fatalf("disconnected status: %+v", s)
+	}
+	g.deliverInvocationReconnectRequests(map[string]string{"dev": strings.Repeat("1", 32)})
+	select {
+	case <-attemptStarted:
+	case <-ctx.Done():
+		t.Fatal("reconnect did not start")
+	}
+	if s := c.Status(); s.State != InvocationReconnecting || s.ReconnectAttempts != 1 || s.ActiveLeaseID != "" {
+		t.Fatalf("reconnecting status: %+v", s)
+	}
+	close(failAttempt)
+	for c.Status().State == InvocationReconnecting {
+		select {
+		case <-time.After(time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal("reconnect did not finish")
+		}
+	}
+	s := c.Status()
+	if s.State != InvocationDisconnected || s.LastReconnectError == nil || !strings.Contains(s.LastReconnectError.Error(), "503") {
+		t.Fatalf("failed attempt status: %+v", s)
+	}
+	select {
+	case <-c.done:
+		t.Fatal("failed operator reconnect ended session")
+	default:
+	}
+	g.deliverInvocationReconnectRequests(map[string]string{"dev": strings.Repeat("2", 32)})
+	waitForActiveLease(t, ctx, c, nextID)
+	s = c.Status()
+	if s.State != InvocationConnected || s.ReconnectAttempts != 2 || s.LastReconnectError == nil || !errors.Is(s.LastDisconnectError, ErrInvocationOutcomeUnknown) {
+		t.Fatalf("recovered status: %+v", s)
+	}
+	if initial.State != InvocationConnected || initial.ActiveLeaseID != firstID || initial.LastDisconnectError != nil {
+		t.Fatal("previous snapshot changed")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s := c.Status(); s.State != InvocationClosed || s.ActiveLeaseID != "" {
+		t.Fatalf("closed status: %+v", s)
+	}
+	if registrations.Load() != 3 {
+		t.Fatalf("unexpected registration count: %d", registrations.Load())
+	}
+}

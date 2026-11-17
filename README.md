@@ -234,7 +234,7 @@ listener or tunnel is required. Follow the [Playground setup guide](docs/PLAYGRO
 for state, history, and tool-mocking walkthroughs, and the
 [scenario integration guide](docs/SCENARIO_INTEGRATION.md) for handler and tool code.
 
-The SDK sends a WebSocket Ping every 30 seconds and waits up to 30 seconds for
+The SDK sends a WebSocket Ping every 10 seconds and waits up to 30 seconds for
 the matching Pong using the WebSocket library. This runs independently of HTTP
 configuration polling, lease renewal, and agent work. A heartbeat failure ends
 the connection without reconnecting or replaying requests. Socket errors retain
@@ -305,7 +305,7 @@ selects the local or hosted deployment.
 | `RequestTimeout` | Invocation timeout, default two minutes; accepted range 1 second–10 minutes. |
 | `InvocationRequest` | Contains `ID`, `Purpose`, `Messages`, `SessionID`, `RunID`, `Deadline`, optional `State`, `History`, and `Traceparent`, and `ContractVersion`. A valid W3C v00 `Traceparent` scopes handler-context checks to the turn trace without changing `SessionID`; absent or malformed values keep the existing trace fallback. |
 | `InvocationWriter.TextDelta` | Sends a text chunk immediately over the outbound WebSocket. The current platform broker collects chunks before returning the full response to Playground. |
-| `InvocationConnection` | Exposes the initial lease `ID` and pinned `ContractVersion`, the current `ActiveLeaseID()`, `ExpiresAt()`, `Close()`, and blocking `Wait()`. |
+| `InvocationConnection` | Exposes the initial lease `ID` and pinned `ContractVersion`, the current `ActiveLeaseID()`, `ExpiresAt()`, `Status()`, `Close()`, and blocking `Wait()`. |
 
 `State` is `map[string]json.RawMessage`: nil means no state was supplied; a non-nil
 empty map means explicit empty state. A dataset scenario supplies its own literal
@@ -323,6 +323,17 @@ and reports `ErrConnectionRevoked`, `ErrConnectionExpired`, or
 `ErrInvocationOutcomeUnknown` when appropriate. With `AllowOperatorReconnect`
 enabled, `Wait()` stays blocked until local shutdown. Each operator request
 authorizes one fresh registration using the original invocation options and handler.
+Use `connection.Status()` for health checks and diagnostics while `Wait()` is
+blocked. The snapshot reports `State` (`connected`, `disconnected`, `reconnecting`,
+or `closed`), the current `ActiveLeaseID`, last acknowledged `ExpiresAt`, and the
+number of operator `ReconnectAttempts` (excluding initial registration).
+`LastDisconnectError` and `LastReconnectError` retain the most recent errors,
+including after successful recovery; use `State` to determine current connection
+status. These errors support `errors.Is` where the underlying error does.
+A failed operator reconnect remains disconnected until a new operator request;
+the SDK does not automatically retry the same request. Expiry is historical when
+disconnected or closed and must not be used alone as a readiness check.
+
 In-flight work is never replayed. Cancellation is
 cooperative and cannot reverse completed side effects. Each connection serves one
 active invocation at a time, with a maximum aggregate text output of 1 MiB.

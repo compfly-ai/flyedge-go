@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Expose invocation connection status, operator reconnect attempt counts, and the most recent disconnect and reconnect errors while `Wait()` remains blocked. Reconnect authorization and invocation replay behavior are unchanged.
+
 - Fix scenario mock completion: `required_matches: 0` permits an optional mock to be used once without marking evidence incomplete. Required occurrences and unexpected-call rejection are unchanged.
 - Send reverse-invocation WebSocket Pings every 10 seconds instead of 30, while retaining the independent 30-second Pong timeout. This provides margin before a gateway idle timeout; it does not replay interrupted invocations.
 

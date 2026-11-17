@@ -167,20 +167,45 @@ type invocationFrame struct {
 	Error            string                   `json:"error,omitempty"`
 }
 
+// InvocationState describes the current transport lifecycle, not invocation outcomes.
+type InvocationState string
+
+const (
+	InvocationConnected    InvocationState = "connected"
+	InvocationDisconnected InvocationState = "disconnected"
+	InvocationReconnecting InvocationState = "reconnecting"
+	InvocationClosed       InvocationState = "closed"
+)
+
+// InvocationStatus is a point-in-time snapshot. Historical errors remain available
+// after recovery; State and ActiveLeaseID describe current readiness. ExpiresAt is
+// the last acknowledged lease expiry, including while disconnected or closed.
+type InvocationStatus struct {
+	State               InvocationState
+	ActiveLeaseID       string
+	ExpiresAt           time.Time
+	ReconnectAttempts   uint64
+	LastDisconnectError error
+	LastReconnectError  error
+}
+
 // InvocationConnection represents a serving session. ID and ContractVersion describe
 // its initial lease. Use ActiveLeaseID to identify the currently connected lease.
 type InvocationConnection struct {
-	ContractVersion string
-	ID              string
-	environment     string
-	reconnect       chan string
-	registered      bool // protected by Guard.invocationMu
-	cancel          context.CancelFunc
-	done            chan struct{}
-	err             error // published before done closes
-	mu              sync.RWMutex
-	lease           *invocationLease
-	connected       bool
+	ContractVersion     string
+	ID                  string
+	environment         string
+	reconnect           chan string
+	registered          bool // protected by Guard.invocationMu
+	cancel              context.CancelFunc
+	done                chan struct{}
+	err                 error // published before done closes
+	mu                  sync.RWMutex
+	lease               *invocationLease
+	state               InvocationState
+	reconnectAttempts   uint64
+	lastDisconnectError error
+	lastReconnectError  error
 }
 
 type invocationLease struct {
@@ -205,10 +230,30 @@ func (c *InvocationConnection) ExpiresAt() time.Time {
 func (c *InvocationConnection) ActiveLeaseID() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if !c.connected {
+	if c.state != InvocationConnected {
 		return ""
 	}
 	return c.lease.id
+}
+
+// Status can be polled while Wait is blocked, including while awaiting an
+// operator reconnect. It does not invoke user callbacks or change the connection.
+func (c *InvocationConnection) Status() InvocationStatus {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s := InvocationStatus{
+		State:               c.state,
+		ReconnectAttempts:   c.reconnectAttempts,
+		LastDisconnectError: c.lastDisconnectError,
+		LastReconnectError:  c.lastReconnectError,
+	}
+	if c.lease != nil {
+		s.ExpiresAt = c.lease.ExpiresAt()
+		if c.state == InvocationConnected {
+			s.ActiveLeaseID = c.lease.id
+		}
+	}
+	return s
 }
 
 func (c *invocationLease) ExpiresAt() time.Time {
@@ -263,7 +308,7 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 		return nil, errors.New("flyedge: guard closed")
 	}
 	c.ContractVersion, c.ID = lease.contractVersion, lease.id
-	c.lease, c.connected = lease, true
+	c.lease, c.state = lease, InvocationConnected
 	c.registered = true
 	if c.reconnect != nil {
 		g.startConfigPoll()
@@ -300,6 +345,9 @@ func (g *Guard) trackInvocation(c *InvocationConnection) error {
 
 func (c *InvocationConnection) finish(g *Guard) {
 	c.cancel()
+	c.mu.Lock()
+	c.state = InvocationClosed
+	c.mu.Unlock()
 	g.invocationMu.Lock()
 	g.invocations = slices.DeleteFunc(g.invocations, func(other *InvocationConnection) bool { return other == c })
 	g.invocationMu.Unlock()
@@ -314,7 +362,8 @@ func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts Invocat
 		if lease != nil {
 			lease.serve(g, opts, handler)
 			c.mu.Lock()
-			c.connected = false
+			c.state = InvocationDisconnected
+			c.lastDisconnectError = lease.err
 			c.mu.Unlock()
 			if c.reconnect == nil {
 				c.err = lease.err
@@ -332,11 +381,20 @@ func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts Invocat
 				continue
 			}
 			lastAttempt = request
+			c.mu.Lock()
+			c.state = InvocationReconnecting
+			c.reconnectAttempts++
+			c.mu.Unlock()
 			next, err := g.openInvocation(ctx, opts, request)
 			if err == nil {
 				lease = next
 				c.mu.Lock()
-				c.lease, c.connected = lease, true
+				c.lease, c.state = lease, InvocationConnected
+				c.mu.Unlock()
+			} else {
+				c.mu.Lock()
+				c.state = InvocationDisconnected
+				c.lastReconnectError = err
 				c.mu.Unlock()
 			}
 		}
