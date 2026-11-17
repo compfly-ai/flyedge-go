@@ -92,6 +92,8 @@ type InvocationOptions struct {
 	AllowInsecureLoopback bool `json:"-"`
 	// AllowOperatorReconnect lets a platform operator request a fresh lease after a disconnect.
 	AllowOperatorReconnect bool `json:"-"`
+	// AutoReconnect recovers an unexpired lease after transport loss; requires broker protocol v1.
+	AutoReconnect bool `json:"auto_reconnect,omitempty"`
 	// AllowSimulationInjection defaults to true when nil for reverse invocation.
 	// Set a pointer to false to reject injected mocks.
 	AllowSimulationInjection *bool `json:"allow_simulation_injection"`
@@ -185,6 +187,9 @@ type InvocationStatus struct {
 	ActiveLeaseID       string
 	ExpiresAt           time.Time
 	ReconnectAttempts   uint64
+	RecoveryAttempts    uint64
+	NextRetryAt         time.Time
+	Heartbeat           InvocationHeartbeat
 	LastDisconnectError error
 	LastReconnectError  error
 }
@@ -204,6 +209,8 @@ type InvocationConnection struct {
 	lease               *invocationLease
 	state               InvocationState
 	reconnectAttempts   uint64
+	recoveryAttempts    uint64
+	nextRetryAt         time.Time
 	lastDisconnectError error
 	lastReconnectError  error
 }
@@ -217,6 +224,8 @@ type invocationLease struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	err             error
+	diagnosticsMu   sync.RWMutex
+	heartbeat       InvocationHeartbeat
 }
 
 // ExpiresAt returns the latest acknowledged lease expiry. Automatic renewal advances it.
@@ -244,11 +253,16 @@ func (c *InvocationConnection) Status() InvocationStatus {
 	s := InvocationStatus{
 		State:               c.state,
 		ReconnectAttempts:   c.reconnectAttempts,
+		RecoveryAttempts:    c.recoveryAttempts,
+		NextRetryAt:         c.nextRetryAt,
 		LastDisconnectError: c.lastDisconnectError,
 		LastReconnectError:  c.lastReconnectError,
 	}
 	if c.lease != nil {
 		s.ExpiresAt = c.lease.ExpiresAt()
+		c.lease.diagnosticsMu.RLock()
+		s.Heartbeat = c.lease.heartbeat
+		c.lease.diagnosticsMu.RUnlock()
 		if c.state == InvocationConnected {
 			s.ActiveLeaseID = c.lease.id
 		}
@@ -347,6 +361,7 @@ func (c *InvocationConnection) finish(g *Guard) {
 	c.cancel()
 	c.mu.Lock()
 	c.state = InvocationClosed
+	c.nextRetryAt = time.Time{}
 	c.mu.Unlock()
 	g.invocationMu.Lock()
 	g.invocations = slices.DeleteFunc(g.invocations, func(other *InvocationConnection) bool { return other == c })
@@ -365,6 +380,24 @@ func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts Invocat
 			c.state = InvocationDisconnected
 			c.lastDisconnectError = lease.err
 			c.mu.Unlock()
+			if opts.AutoReconnect && errors.Is(lease.err, ErrInvocationOutcomeUnknown) && ctx.Err() == nil {
+				next, err := c.recover(ctx, g, opts, lease)
+				if err == nil {
+					lease = next
+					c.mu.Lock()
+					c.lease = next
+					c.state = InvocationConnected
+					c.nextRetryAt = time.Time{}
+					c.mu.Unlock()
+					continue
+				}
+				c.mu.Lock()
+				c.state = InvocationDisconnected
+				c.nextRetryAt = time.Time{}
+				c.lastReconnectError = err
+				c.mu.Unlock()
+				lease.err = err
+			}
 			if c.reconnect == nil {
 				c.err = lease.err
 				return
@@ -402,6 +435,15 @@ func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts Invocat
 }
 
 func (g *Guard) openInvocation(ctx context.Context, opts InvocationOptions, reconnectRequestID string) (*invocationLease, error) {
+	return g.openInvocationRequest(ctx, opts, reconnectRequestID, nil)
+}
+func (g *Guard) openInvocationRequest(ctx context.Context, opts InvocationOptions, reconnectRequestID string, previous *invocationLease) (*invocationLease, error) {
+	requestCtx := ctx
+	if previous != nil {
+		var stop context.CancelFunc
+		requestCtx, stop = context.WithDeadline(ctx, previous.ExpiresAt())
+		defer stop()
+	}
 	base, err := url.Parse(g.cfg.APIURL)
 	if err != nil {
 		return nil, err
@@ -424,7 +466,12 @@ func (g *Guard) openInvocation(ctx context.Context, opts InvocationOptions, reco
 	if err != nil {
 		return nil, err
 	}
-	registration, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.cfg.APIURL, "/")+"/v1/flyedge/invocations", bytes.NewReader(body))
+	endpoint := strings.TrimRight(g.cfg.APIURL, "/") + "/v1/flyedge/invocations"
+	if previous != nil {
+		endpoint += "/" + previous.id + "/recover"
+		body, _ = json.Marshal(map[string]string{"nonce": randID()})
+	}
+	registration, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -446,20 +493,27 @@ func (g *Guard) openInvocation(ctx context.Context, opts InvocationOptions, reco
 		return nil, errors.New("flyedge: invocation registration rejected (HTTP 422); check the registration options and ensure the broker supports LeaseDuration and automatic renewal (a broker rollout may still be in progress)")
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("flyedge: invocation registration returned HTTP %d", response.StatusCode)
+		return nil, invocationHTTPError(response)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 16*1024))
 	if err != nil {
 		return nil, err
 	}
 	var lease struct {
-		ContractVersion string    `json:"contract_version"`
-		ID              string    `json:"id"`
-		Token           string    `json:"token"`
-		ExpiresAt       time.Time `json:"expires_at"`
+		RecoveryProtocolVersion int       `json:"recovery_protocol_version"`
+		ContractVersion         string    `json:"contract_version"`
+		ID                      string    `json:"id"`
+		Token                   string    `json:"token"`
+		ExpiresAt               time.Time `json:"expires_at"`
 	}
 	if err = json.Unmarshal(raw, &lease); err != nil {
 		return nil, err
+	}
+	if opts.AutoReconnect && lease.RecoveryProtocolVersion != 1 {
+		return nil, errors.New("flyedge: broker does not support invocation recovery protocol v1")
+	}
+	if previous != nil && (lease.ID != previous.id || lease.ContractVersion != previous.contractVersion || !lease.ExpiresAt.Equal(previous.ExpiresAt())) {
+		return nil, errors.New("flyedge: recovery changed the authorized lease")
 	}
 	if len(lease.ID) != 32 || strings.IndexFunc(lease.ID, func(r rune) bool { return !strings.ContainsRune("0123456789abcdef", r) }) >= 0 || lease.Token == "" || !lease.ExpiresAt.After(time.Now()) || lease.ExpiresAt.After(time.Now().Add(opts.LeaseDuration+5*time.Second)) {
 		return nil, errors.New("flyedge: invalid invocation lease")
@@ -474,21 +528,27 @@ func (g *Guard) openInvocation(ctx context.Context, opts InvocationOptions, reco
 		base.Scheme = "ws"
 	}
 	cctx, cancel := context.WithCancel(ctx)
-	dialCtx, stopDial := context.WithTimeout(cctx, g.cfg.Timeout)
-	ws, _, err := websocket.Dial(dialCtx, base.String(), &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + lease.Token}}, HTTPClient: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}})
+	dialCtx, stopDial := context.WithTimeout(requestCtx, g.cfg.Timeout)
+	ws, dialResponse, err := websocket.Dial(dialCtx, base.String(), &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + lease.Token}}, HTTPClient: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}})
 	stopDial()
 	if err != nil {
 		cancel()
+		if dialResponse != nil {
+			return nil, invocationHTTPError(dialResponse)
+		}
 		return nil, err
 	}
 	ws.SetReadLimit(256 * 1024)
-	readyCtx, stopReady := context.WithTimeout(cctx, g.cfg.Timeout)
+	readyCtx, stopReady := context.WithTimeout(requestCtx, g.cfg.Timeout)
 	var ready invocationFrame
 	err = wsjson.Read(readyCtx, ws, &ready)
 	stopReady()
 	if err != nil || ready.Type != "ready" {
 		cancel()
 		_ = ws.CloseNow()
+		if err != nil {
+			return nil, fmt.Errorf("%w: ready handshake: %w", ErrInvocationOutcomeUnknown, err)
+		}
 		return nil, errors.New("flyedge: invocation connection did not become ready")
 	}
 	return &invocationLease{contractVersion: lease.ContractVersion, id: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel}, nil
@@ -523,7 +583,7 @@ func (c *invocationLease) send(ctx context.Context, f invocationFrame) error {
 // invocationHeartbeat keeps the invocation socket active independently of the
 // HTTP config poller and lease renewal. Ping handles matching pongs; serve's
 // reader must remain active while it waits. Each ping has its own deadline.
-func invocationHeartbeat(ctx context.Context, ws *websocket.Conn, interval, timeout time.Duration) error {
+func invocationHeartbeat(ctx context.Context, ws *websocket.Conn, interval, timeout time.Duration, observe ...func(bool)) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -532,7 +592,13 @@ func invocationHeartbeat(ctx context.Context, ws *websocket.Conn, interval, time
 			return ctx.Err()
 		case <-ticker.C:
 			pingCtx, cancel := context.WithTimeout(ctx, timeout)
+			if len(observe) > 0 {
+				observe[0](false)
+			}
 			err := ws.Ping(pingCtx)
+			if err == nil && len(observe) > 0 {
+				observe[0](true)
+			}
 			cancel()
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -559,7 +625,17 @@ func (c *invocationLease) serve(g *Guard, o InvocationOptions, h InvocationHandl
 	readErr := make(chan error, 1)
 	heartbeatErr := make(chan error, 1)
 	go func() {
-		heartbeatErr <- invocationHeartbeat(c.ctx, c.ws, 10*time.Second, 30*time.Second)
+		heartbeatErr <- invocationHeartbeat(c.ctx, c.ws, 10*time.Second, 30*time.Second, func(pong bool) {
+			c.diagnosticsMu.Lock()
+			defer c.diagnosticsMu.Unlock()
+			if pong {
+				c.heartbeat.LastPongAt = time.Now()
+				c.heartbeat.PongsReceived++
+			} else {
+				c.heartbeat.LastPingAt = time.Now()
+				c.heartbeat.PingsSent++
+			}
+		})
 	}()
 	go func() {
 		for {
@@ -568,6 +644,9 @@ func (c *invocationLease) serve(g *Guard, o InvocationOptions, h InvocationHandl
 				readErr <- err
 				return
 			}
+			c.diagnosticsMu.Lock()
+			c.heartbeat.LastFrameAt = time.Now()
+			c.diagnosticsMu.Unlock()
 			select {
 			case frames <- f:
 			case <-c.ctx.Done():

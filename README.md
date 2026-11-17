@@ -298,6 +298,7 @@ selects the local or hosted deployment.
 | `InvocationOptions.Purposes` | Explicitly permits `PurposePlayground`, `PurposeSimulation`, and/or `PurposeEval`. |
 | `LeaseDuration` | Renewable authorization window, default one hour; accepted range 1 second–24 hours. |
 | `AutoRenew` | `*bool`, default true when nil. A pointer to false creates a finite lease. Renewal keeps the same connection alive until stopped or revoked. |
+| `AutoReconnect` | Defaults to false. Recovers a dropped socket within its existing unexpired lease. Requires broker recovery protocol v1; unsupported brokers fail setup. |
 | `AllowOperatorReconnect` | Defaults to false. Allows an authorized Platform operator to request a fresh lease through the signed config heartbeat after the socket closes. Requires a compatible Platform deployment. |
 | `AllowClientState` | `*bool`, default true when nil. A pointer to false rejects state. A declared state contract requires it to be enabled. |
 | `AllowClientHistory` | Opt-in permission for caller-supplied conversation history. Map `request.History` followed by `request.Messages` into your provider conversation without re-executing past tool calls. |
@@ -333,6 +334,20 @@ status. These errors support `errors.Is` where the underlying error does.
 A failed operator reconnect remains disconnected until a new operator request;
 the SDK does not automatically retry the same request. Expiry is historical when
 disconnected or closed and must not be used alone as a readiness check.
+
+With `AutoReconnect: true`, transport failures enter one serialized recovery loop.
+Retries use jittered exponential backoff (0.5–1 second initially, up to 30 seconds)
+and respect `Retry-After`. HTTP 409 (including a pending handshake), 429, 5xx,
+and network failures are retryable. Authentication failures, missing/revoked leases,
+unsupported protocols, and changed authorization are terminal. Cancellation and the
+last acknowledged lease deadline bound recovery. Recovery never renews a lease,
+changes its scope, or falls back to ordinary registration. Initial registration
+failures still return to the caller; this loop starts after a ready connection.
+
+`Status().RecoveryAttempts` counts automatic attempts separately from operator
+attempts; `NextRetryAt` identifies a scheduled retry. `Heartbeat` reports ping/pong
+counts and timestamps, plus the last application frame, for the current socket.
+It contains no request payloads. A replacement socket starts fresh counters.
 
 In-flight work is never replayed. Cancellation is
 cooperative and cannot reverse completed side effects. Each connection serves one
