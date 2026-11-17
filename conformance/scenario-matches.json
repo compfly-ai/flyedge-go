@@ -1,0 +1,22 @@
+[
+  {
+    "required": 0,
+    "matches": 0,
+    "complete": true
+  },
+  {
+    "required": 0,
+    "matches": 1,
+    "complete": true
+  },
+  {
+    "required": 1,
+    "matches": 0,
+    "complete": false
+  },
+  {
+    "required": 1,
+    "matches": 1,
+    "complete": true
+  }
+]

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -259,5 +260,53 @@ func TestExecutionPlansArePrivate(t *testing.T) {
 	}
 	if c.BeginExecution("wrong", plan("a", "a")) == nil {
 		t.Fatal("scope mismatch accepted")
+	}
+}
+
+func TestOptionalMockCanBeUnusedOrUsedOnce(t *testing.T) {
+	var m scenarioMocks
+	m.configure(json.RawMessage(strings.Replace(string(fixture(true)), `"required_matches":1`, `"required_matches":0`, 1)))
+	if m.status()["complete"] != true {
+		t.Fatal("unused optional mock is incomplete")
+	}
+	_, mocked, err := m.before("eval:run:s", "read", map[string]any{"grade": "A"}, true)
+	if err != nil || !mocked {
+		t.Fatalf("mocked=%v err=%v", mocked, err)
+	}
+	if m.status()["complete"] != true {
+		t.Fatal("used optional mock is incomplete")
+	}
+	if _, _, err = m.before("eval:run:s", "read", map[string]any{"grade": "A"}, true); err == nil {
+		t.Fatal("repeated use accepted")
+	}
+	if m.status()["complete"] != false {
+		t.Fatal("rejected repeat must remain incomplete")
+	}
+}
+
+func TestScenarioMatchCountConformance(t *testing.T) {
+	raw, err := os.ReadFile("../conformance/scenario-matches.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Required int
+		Matches  int
+		Complete bool
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		var m scenarioMocks
+		m.configure(json.RawMessage(strings.Replace(string(fixture(true)), `"required_matches":1`, fmt.Sprintf(`"required_matches":%d`, c.Required), 1)))
+		if c.Matches == 1 {
+			if _, _, err := m.before("eval:run:s", "read", map[string]any{"grade": "A"}, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if m.status()["complete"] != c.Complete {
+			t.Fatalf("case %+v: %+v", c, m.status())
+		}
 	}
 }
