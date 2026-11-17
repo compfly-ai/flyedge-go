@@ -47,7 +47,8 @@ Pass the invocation handler's context to provider requests. The existing
 usage on that Guard's admitted invocation. Its completion frame includes the
 optional version 1 `agent_usage` envelope, bound to the invocation and session.
 Failed invocation frames omit this envelope. This does not add a second model
-telemetry event.
+telemetry event. Within an invocation, streamed OpenAI Chat requests gain
+`stream_options.include_usage` unless the caller set it, so their usage is measured.
 
 For a provider integration that does not use this transport, call
 `guard.RecordInvocationUsage(ctx, callID, model, usage)` once for each started

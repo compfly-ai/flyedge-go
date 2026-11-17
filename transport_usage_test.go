@@ -2,6 +2,7 @@ package flyedge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -294,5 +295,59 @@ func TestInvocationUsageGeminiReasoningIsIncludedInOutput(t *testing.T) {
 	counts, _ := observedModelUsage([]byte(`{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":4,"totalTokenCount":14}}`), false)
 	if counts == nil || counts.ReasoningTokens != nil {
 		t.Fatal("absent reasoning became zero")
+	}
+}
+
+func TestInvocationUsageRequestsStreamedChatUsageOnlyInsideAnInvocation(t *testing.T) {
+	g, err := New(Config{}, WithoutCloudTelemetry(), WithEnforcer(usageChecker{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	var sent []map[string]any
+	base := usageBase(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		sent = append(sent, body)
+		stream := "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"
+		if options, _ := body["stream_options"].(map[string]any); options["include_usage"] == true {
+			stream += "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,\"total_tokens\":14}}\n\n"
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream + "data: [DONE]\n\n"))}, nil
+	})
+	call := func(ctx context.Context, body string) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/chat/completions", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := g.WrapRoundTripper(base).RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			t.Fatal(err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, usage := usageContext(g, "turn", "session")
+	call(ctx, `{"model":"model","stream":true,"stream_options":{"continuous_usage_stats":false},"messages":[{"role":"user","content":"hi"}]}`)
+	call(ctx, `{"model":"model","messages":[{"role":"user","content":"hi"}]}`)
+	call(context.Background(), `{"model":"model","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	options, _ := sent[0]["stream_options"].(map[string]any)
+	if options["include_usage"] != true || options["continuous_usage_stats"] != false {
+		t.Fatalf("streamed invocation call options=%v", sent[0]["stream_options"])
+	}
+	for _, body := range sent[1:] {
+		if _, found := body["stream_options"]; found {
+			t.Fatalf("usage requested outside a streamed invocation call: %v", body)
+		}
+	}
+	got := usage.finish()
+	if got == nil || got.ModelCalls != 2 || got.ReportedCalls != 1 || got.TotalTokens != nil || *got.InputTokens != 10 {
+		t.Fatalf("usage=%+v", got)
 	}
 }
