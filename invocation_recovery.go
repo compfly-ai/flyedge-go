@@ -47,13 +47,20 @@ func invocationRecoveryDelay(attempt uint64) time.Duration {
 	}
 	return cap/2 + time.Duration(rand.Int64N(int64(cap/2)+1))
 }
+func invocationRecoveryRetryDelay(attempt uint64, last error) time.Duration {
+	var h *InvocationHTTPError
+	if errors.As(last, &h) && h.StatusCode == http.StatusConflict {
+		return invocationRecoveryDelay(1)
+	}
+	return invocationRecoveryDelay(attempt)
+}
 func (c *InvocationConnection) recover(ctx context.Context, g *Guard, o InvocationOptions, previous *invocationLease) (*invocationLease, error) {
 	sessionCtx := ctx
 	ctx, cancel := context.WithDeadline(ctx, previous.ExpiresAt())
 	defer cancel()
 	var last error
 	for attempt := uint64(1); ; attempt++ {
-		delay := invocationRecoveryDelay(attempt)
+		delay := invocationRecoveryRetryDelay(attempt, last)
 		var h *InvocationHTTPError
 		if errors.As(last, &h) {
 			delay = max(delay, h.RetryAfter)
@@ -100,6 +107,7 @@ func (c *InvocationConnection) recover(ctx context.Context, g *Guard, o Invocati
 // InvocationHeartbeat contains transport timing only, never invocation payloads.
 // LastFrameAt counts application frames; the library handles control frames internally.
 type InvocationHeartbeat struct {
+	EdgeRay       string // Cloudflare handshake trace ID, when provided by the endpoint.
 	LastPingAt    time.Time
 	LastPongAt    time.Time
 	LastFrameAt   time.Time

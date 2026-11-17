@@ -336,7 +336,7 @@ disconnected or closed and must not be used alone as a readiness check.
 
 Recovery is automatic when the broker acknowledges recovery protocol v1. No configuration switch is required. Older brokers remain usable, but cannot recover; `Status().RecoverySupported` reports this capability. Transport failures enter one serialized recovery loop.
 Retries use jittered exponential backoff (0.5–1 second initially, up to 30 seconds)
-and respect `Retry-After`. HTTP 409 (including a pending handshake), 429, 5xx,
+and respect `Retry-After`. Temporary HTTP 409 conflicts keep a short 0.5–1 second retry delay. Signed recovery requests prove ownership with the current socket token so compatible brokers can fence the old socket immediately, without waiting for its heartbeat timeout. HTTP 409 (including a pending handshake), 429, 5xx,
 and network failures are retryable. Authentication failures, missing/revoked leases,
 unsupported protocols, and changed authorization are terminal. Cancellation and the
 last acknowledged lease deadline bound recovery. Recovery never renews a lease,
@@ -346,7 +346,7 @@ failures still return to the caller; this loop starts after a ready connection.
 `Status().RecoveryAttempts` counts automatic attempts separately from operator
 attempts; `NextRetryAt` identifies a scheduled retry. `Heartbeat` reports ping/pong
 counts and timestamps, plus the last application frame, for the current socket.
-It contains no request payloads. A replacement socket starts fresh counters.
+It contains no request payloads. `Heartbeat.EdgeRay` records the endpoint’s Cloudflare handshake trace ID when available, so resets can be correlated with edge logs. A replacement socket starts fresh counters.
 
 In-flight work is never replayed. Cancellation is
 cooperative and cannot reverse completed side effects. Each connection serves one

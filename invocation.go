@@ -215,6 +215,7 @@ type InvocationConnection struct {
 }
 
 type invocationLease struct {
+	token             string
 	contractVersion   string
 	recoverySupported bool
 	id                string
@@ -471,7 +472,7 @@ func (g *Guard) openInvocationRequest(ctx context.Context, opts InvocationOption
 	endpoint := strings.TrimRight(g.cfg.APIURL, "/") + "/v1/flyedge/invocations"
 	if previous != nil {
 		endpoint += "/" + previous.id + "/recover"
-		body, _ = json.Marshal(map[string]string{"nonce": randID()})
+		body, _ = json.Marshal(map[string]string{"nonce": randID(), "previous_token": previous.token})
 	}
 	registration, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -553,7 +554,11 @@ func (g *Guard) openInvocationRequest(ctx context.Context, opts InvocationOption
 		}
 		return nil, errors.New("flyedge: invocation connection did not become ready")
 	}
-	return &invocationLease{recoverySupported: lease.RecoveryProtocolVersion == 1, contractVersion: lease.ContractVersion, id: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel}, nil
+	edgeRay := ""
+	if dialResponse != nil && len(dialResponse.Header.Get("Cf-Ray")) <= 128 {
+		edgeRay = dialResponse.Header.Get("Cf-Ray")
+	}
+	return &invocationLease{heartbeat: InvocationHeartbeat{EdgeRay: edgeRay}, token: lease.Token, recoverySupported: lease.RecoveryProtocolVersion == 1, contractVersion: lease.ContractVersion, id: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel}, nil
 }
 
 type invocationOutput struct {

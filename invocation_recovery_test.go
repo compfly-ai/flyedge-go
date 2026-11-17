@@ -71,6 +71,7 @@ func TestRecoverySurvivesPendingHandshakeAndKeepsSessionAlive(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer rotated" {
 			t.Error("missing rotated token")
 		}
+		w.Header().Set("Cf-Ray", "fixture-edge")
 		ws, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
@@ -89,6 +90,9 @@ func TestRecoverySurvivesPendingHandshakeAndKeepsSessionAlive(t *testing.T) {
 	lease, err := c.recover(ctx, g, InvocationOptions{AllowInsecureLoopback: true, LeaseDuration: time.Minute}, &invocationLease{id: id, expiresAt: expiry.Add(-10 * time.Second)})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if lease.heartbeat.EdgeRay != "fixture-edge" {
+		t.Fatal("missing edge trace ID")
 	}
 	defer lease.cancel()
 	defer lease.ws.CloseNow()
@@ -151,8 +155,8 @@ func TestRecoveryIsAutomaticAndDoesNotReplayInterruptedWork(t *testing.T) {
 				}
 			case "/v1/flyedge/invocations/" + id + "/recover":
 				recoveries.Add(1)
-				if len(body) != 1 || body["nonce"] == nil {
-					t.Error("recovery must only send fresh nonce")
+				if len(body) != 2 || body["nonce"] == nil || body["previous_token"] != "fixture" {
+					t.Error("recovery must send fresh nonce and current-token proof")
 				}
 			default:
 				t.Error("unexpected registration path")
@@ -223,5 +227,17 @@ func TestRecoveryIsAutomaticAndDoesNotReplayInterruptedWork(t *testing.T) {
 	}
 	if s := c.Status(); !s.RecoverySupported || s.RecoveryAttempts != 1 {
 		t.Fatalf("status=%+v", s)
+	}
+}
+
+func TestRecoveryConflictsDoNotGrowOutageBackoff(t *testing.T) {
+	for i := 0; i < 30; i++ {
+		d := invocationRecoveryRetryDelay(10, &InvocationHTTPError{StatusCode: 409})
+		if d < 500*time.Millisecond || d > time.Second {
+			t.Fatalf("conflict delay=%v", d)
+		}
+	}
+	if d := invocationRecoveryRetryDelay(10, &InvocationHTTPError{StatusCode: 503}); d < 15*time.Second {
+		t.Fatalf("outage retry too aggressive: %v", d)
 	}
 }
