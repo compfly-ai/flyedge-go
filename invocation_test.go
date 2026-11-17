@@ -67,9 +67,13 @@ func invocationCapacityFixture(t *testing.T, duration time.Duration, autoRenew *
 		if r.Method == http.MethodPost {
 			var registration struct {
 				AllowClientState *bool `json:"allow_client_state"`
+				AutoReconnect    bool  `json:"auto_reconnect"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&registration); err != nil {
 				t.Error(err)
+			}
+			if !registration.AutoReconnect {
+				t.Error("automatic recovery was not requested by default")
 			}
 			wantState := allowState == nil || *allowState
 			if registration.AllowClientState == nil || *registration.AllowClientState != wantState {

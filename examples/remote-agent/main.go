@@ -84,7 +84,7 @@ func run() error {
 			case <-ticker.C:
 				s := c.Status()
 				logger.Info("connection.status", "state", s.State, "connection", s.ActiveLeaseID,
-					"expires", s.ExpiresAt, "heartbeat", s.Heartbeat, "recovery_attempts", s.RecoveryAttempts,
+					"expires", s.ExpiresAt, "heartbeat", s.Heartbeat, "recovery_supported", s.RecoverySupported, "recovery_attempts", s.RecoveryAttempts,
 					"next_retry", s.NextRetryAt, "last_disconnect", s.LastDisconnectError, "last_reconnect", s.LastReconnectError)
 			}
 		}

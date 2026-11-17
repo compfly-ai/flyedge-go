@@ -92,8 +92,6 @@ type InvocationOptions struct {
 	AllowInsecureLoopback bool `json:"-"`
 	// AllowOperatorReconnect lets a platform operator request a fresh lease after a disconnect.
 	AllowOperatorReconnect bool `json:"-"`
-	// AutoReconnect recovers an unexpired lease after transport loss; requires broker protocol v1.
-	AutoReconnect bool `json:"auto_reconnect,omitempty"`
 	// AllowSimulationInjection defaults to true when nil for reverse invocation.
 	// Set a pointer to false to reject injected mocks.
 	AllowSimulationInjection *bool `json:"allow_simulation_injection"`
@@ -187,6 +185,7 @@ type InvocationStatus struct {
 	ActiveLeaseID       string
 	ExpiresAt           time.Time
 	ReconnectAttempts   uint64
+	RecoverySupported   bool
 	RecoveryAttempts    uint64
 	NextRetryAt         time.Time
 	Heartbeat           InvocationHeartbeat
@@ -216,16 +215,17 @@ type InvocationConnection struct {
 }
 
 type invocationLease struct {
-	contractVersion string
-	id              string
-	expiresAt       time.Time
-	leaseMu         sync.RWMutex
-	ws              *websocket.Conn
-	ctx             context.Context
-	cancel          context.CancelFunc
-	err             error
-	diagnosticsMu   sync.RWMutex
-	heartbeat       InvocationHeartbeat
+	contractVersion   string
+	recoverySupported bool
+	id                string
+	expiresAt         time.Time
+	leaseMu           sync.RWMutex
+	ws                *websocket.Conn
+	ctx               context.Context
+	cancel            context.CancelFunc
+	err               error
+	diagnosticsMu     sync.RWMutex
+	heartbeat         InvocationHeartbeat
 }
 
 // ExpiresAt returns the latest acknowledged lease expiry. Automatic renewal advances it.
@@ -260,6 +260,7 @@ func (c *InvocationConnection) Status() InvocationStatus {
 	}
 	if c.lease != nil {
 		s.ExpiresAt = c.lease.ExpiresAt()
+		s.RecoverySupported = c.lease.recoverySupported
 		c.lease.diagnosticsMu.RLock()
 		s.Heartbeat = c.lease.heartbeat
 		c.lease.diagnosticsMu.RUnlock()
@@ -284,9 +285,9 @@ func (c *InvocationConnection) Close() error { c.cancel(); <-c.done; return nil 
 
 // ServeInvocations explicitly registers ONE handler and opens an outbound socket.
 // Ordinary New/Connect never call it. Leases renew by default until canceled or revoked.
-// Handlers run up to MaxConcurrentInvocations at a time. A disconnect ends the
-// session unless AllowOperatorReconnect is set. With opt-in, a platform operator
-// can request a new lease until the caller closes or cancels the session.
+// Handlers run up to MaxConcurrentInvocations at a time. Supported brokers recover
+// transport failures automatically within the existing lease. AllowOperatorReconnect
+// additionally permits an operator to request a new lease after a terminal failure.
 func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, handler InvocationHandler) (*InvocationConnection, error) {
 	opts, err := opts.validate()
 	if err != nil {
@@ -380,7 +381,7 @@ func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts Invocat
 			c.state = InvocationDisconnected
 			c.lastDisconnectError = lease.err
 			c.mu.Unlock()
-			if opts.AutoReconnect && errors.Is(lease.err, ErrInvocationOutcomeUnknown) && ctx.Err() == nil {
+			if lease.recoverySupported && errors.Is(lease.err, ErrInvocationOutcomeUnknown) && ctx.Err() == nil {
 				next, err := c.recover(ctx, g, opts, lease)
 				if err == nil {
 					lease = next
@@ -456,11 +457,12 @@ func (g *Guard) openInvocationRequest(ctx context.Context, opts InvocationOption
 		InvocationOptions
 		ReconnectRequestID       string `json:"reconnect_request_id,omitempty"`
 		ScenarioExecutionVersion int    `json:"scenario_execution_version"`
+		AutoReconnect            bool   `json:"auto_reconnect"`
 		Nonce                    string `json:"nonce"`
 		LeaseDurationSeconds     int64  `json:"lease_duration_seconds"`
 		TimeoutSeconds           int64  `json:"timeout_seconds"`
 	}{
-		InvocationOptions: opts, ReconnectRequestID: reconnectRequestID, ScenarioExecutionVersion: 2,
+		AutoReconnect: true, InvocationOptions: opts, ReconnectRequestID: reconnectRequestID, ScenarioExecutionVersion: 2,
 		Nonce: randID(), LeaseDurationSeconds: int64(opts.LeaseDuration / time.Second), TimeoutSeconds: int64(opts.RequestTimeout / time.Second),
 	})
 	if err != nil {
@@ -509,10 +511,10 @@ func (g *Guard) openInvocationRequest(ctx context.Context, opts InvocationOption
 	if err = json.Unmarshal(raw, &lease); err != nil {
 		return nil, err
 	}
-	if opts.AutoReconnect && lease.RecoveryProtocolVersion != 1 {
+	if previous != nil && lease.RecoveryProtocolVersion != 1 {
 		return nil, errors.New("flyedge: broker does not support invocation recovery protocol v1")
 	}
-	if previous != nil && (lease.ID != previous.id || lease.ContractVersion != previous.contractVersion || !lease.ExpiresAt.Equal(previous.ExpiresAt())) {
+	if previous != nil && (lease.ID != previous.id || lease.ContractVersion != previous.contractVersion || lease.ExpiresAt.Before(previous.ExpiresAt())) {
 		return nil, errors.New("flyedge: recovery changed the authorized lease")
 	}
 	if len(lease.ID) != 32 || strings.IndexFunc(lease.ID, func(r rune) bool { return !strings.ContainsRune("0123456789abcdef", r) }) >= 0 || lease.Token == "" || !lease.ExpiresAt.After(time.Now()) || lease.ExpiresAt.After(time.Now().Add(opts.LeaseDuration+5*time.Second)) {
@@ -551,7 +553,7 @@ func (g *Guard) openInvocationRequest(ctx context.Context, opts InvocationOption
 		}
 		return nil, errors.New("flyedge: invocation connection did not become ready")
 	}
-	return &invocationLease{contractVersion: lease.ContractVersion, id: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel}, nil
+	return &invocationLease{recoverySupported: lease.RecoveryProtocolVersion == 1, contractVersion: lease.ContractVersion, id: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel}, nil
 }
 
 type invocationOutput struct {
