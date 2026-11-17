@@ -501,7 +501,7 @@ func (c *invocationLease) serve(g *Guard, o InvocationOptions, h InvocationHandl
 	readErr := make(chan error, 1)
 	heartbeatErr := make(chan error, 1)
 	go func() {
-		heartbeatErr <- invocationHeartbeat(c.ctx, c.ws, 30*time.Second, 30*time.Second)
+		heartbeatErr <- invocationHeartbeat(c.ctx, c.ws, 10*time.Second, 30*time.Second)
 	}()
 	go func() {
 		for {

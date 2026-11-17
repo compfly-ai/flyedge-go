@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Send reverse-invocation WebSocket Pings every 10 seconds instead of 30, while retaining the independent 30-second Pong timeout. This provides margin before a gateway idle timeout; it does not replay interrupted invocations.
+
 ## 0.10.0
 
 - Recognize Google and Anthropic Vertex generation routes in `WrapRoundTripper`, including URL-derived model IDs, signed proxy forwarding, and publisher-specific response/SSE inspection.
