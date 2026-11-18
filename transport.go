@@ -267,6 +267,17 @@ func (t *guardRoundTripper) proxyForward(req *http.Request, body []byte) (*http.
 	if req.Header.Get("X-Session-ID") == "" {
 		req.Header.Set("X-Session-ID", t.resolveSession(req))
 	}
+	// Prism files its pre/post-LLM checks under this trace, so a proxied call lands in the same
+	// turn as the SDK's own checks. A caller's own traceparent is kept when no turn trace is set.
+	if traceID, parentSpan, ok := traceFromContext(req.Context()); ok || req.Header.Get("Traceparent") == "" {
+		if traceID == "" {
+			traceID = deriveTraceID(req.Header.Get("X-Session-ID"))
+		}
+		if parentSpan == "" {
+			parentSpan = newSpanID()
+		}
+		req.Header.Set("Traceparent", formatTraceparent(traceID, parentSpan))
+	}
 	if t.guard.signer != nil {
 		hdrs, err := t.guard.signer.Sign(body, time.Now())
 		if err != nil {
