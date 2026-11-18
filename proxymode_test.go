@@ -83,3 +83,52 @@ func TestProxyModeSessionHeader(t *testing.T) {
 		t.Errorf("X-Session-ID = %q, want caller-set header preserved", got)
 	}
 }
+
+// TestProxyModeCarriesTurnTraceparent: a proxied call carries the caller's W3C trace, so prism
+// records its pre/post-LLM checks under the same turn as the SDK's own checks.
+func TestProxyModeCarriesTurnTraceparent(t *testing.T) {
+	g, err := flyedge.New(flyedge.Config{APIURL: "https://prism.local", ProxyMode: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cb := &captureBase{}
+	client := &http.Client{Transport: g.WrapRoundTripper(cb)}
+	const traceID, spanID = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"
+
+	req, _ := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`))
+	req = req.WithContext(flyedge.ContextWithTrace(req.Context(), traceID, spanID))
+	if _, err := client.Do(req); err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	if got, want := cb.req.Header.Get("Traceparent"), "00-"+traceID+"-"+spanID+"-01"; got != want {
+		t.Errorf("Traceparent = %q, want %q", got, want)
+	}
+}
+
+// TestProxyModeTraceparentFollowsSession: without a caller trace, proxied calls in one session
+// share a trace id, the same fallback the SDK's checks use.
+func TestProxyModeTraceparentFollowsSession(t *testing.T) {
+	g, err := flyedge.New(flyedge.Config{APIURL: "https://prism.local", ProxyMode: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cb := &captureBase{}
+	client := &http.Client{Transport: g.WrapRoundTripper(cb)}
+	traceOf := func() string {
+		req, _ := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/chat/completions",
+			strings.NewReader(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`))
+		req = req.WithContext(flyedge.ContextWithSession(req.Context(), "sess-trace"))
+		if _, err := client.Do(req); err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		parts := strings.Split(cb.req.Header.Get("Traceparent"), "-")
+		if len(parts) != 4 || len(parts[1]) != 32 || len(parts[2]) != 16 {
+			t.Fatalf("malformed Traceparent %q", cb.req.Header.Get("Traceparent"))
+		}
+		return parts[1]
+	}
+	if first, second := traceOf(), traceOf(); first != second {
+		t.Errorf("trace ids differ across one session: %q vs %q", first, second)
+	}
+}
