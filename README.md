@@ -234,10 +234,10 @@ listener or tunnel is required. Follow the [Playground setup guide](docs/PLAYGRO
 for state, history, and tool-mocking walkthroughs, and the
 [scenario integration guide](docs/SCENARIO_INTEGRATION.md) for handler and tool code.
 
-The SDK sends a WebSocket Ping every 30 seconds and waits up to 30 seconds for
+The SDK sends a WebSocket Ping every 10 seconds and waits up to 30 seconds for
 the matching Pong using the WebSocket library. This runs independently of HTTP
-configuration polling, lease renewal, and agent work. A heartbeat failure ends
-the connection without reconnecting or replaying requests. Socket errors retain
+configuration polling, lease renewal, and agent work. A heartbeat failure triggers automatic recovery when the broker supports it,
+without replaying requests. Socket errors retain
 the underlying cause while remaining compatible with
 `errors.Is(err, flyedge.ErrInvocationOutcomeUnknown)`.
 
@@ -318,11 +318,20 @@ layer runs. New evaluations do not select run-wide state profiles or substitute
 tokens inside state.
 
 The handler context is canceled on timeout, shutdown, or revocation. Returning an
-error fails that invocation. By default, `Wait()` ends when the socket closes
+error fails that invocation. With a recovery-capable broker, transport failures recover automatically. `Wait()` ends on terminal failure
 and reports `ErrConnectionRevoked`, `ErrConnectionExpired`, or
 `ErrInvocationOutcomeUnknown` when appropriate. With `AllowOperatorReconnect`
 enabled, `Wait()` stays blocked until local shutdown. Each operator request
 authorizes one fresh registration using the original invocation options and handler.
+Recovery is automatic when the broker acknowledges recovery protocol v1. No configuration switch is required. Older brokers remain usable, but cannot recover automatically. Transport failures enter one serialized recovery loop.
+Retries use jittered exponential backoff (0.5–1 second initially, up to 30 seconds)
+and respect `Retry-After`. Temporary HTTP 409 conflicts keep a short 0.5–1 second retry delay. Signed recovery requests prove ownership with the current socket token so compatible brokers can fence the old socket immediately, without waiting for its heartbeat timeout. HTTP 409 (including a pending handshake), 429, 5xx,
+and network failures are retryable. Authentication failures, missing/revoked leases,
+unsupported protocols, and changed authorization are terminal. Cancellation and the
+last acknowledged lease deadline bound recovery. Recovery never renews a lease,
+changes its scope, or falls back to ordinary registration. It accepts a previously committed renewal even if its acknowledgement was lost. Initial registration
+failures still return to the caller; this loop starts after a ready connection.
+
 In-flight work is never replayed. Cancellation is
 cooperative and cannot reverse completed side effects. Each connection serves one
 active invocation at a time, with a maximum aggregate text output of 1 MiB.
