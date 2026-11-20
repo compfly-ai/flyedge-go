@@ -262,12 +262,6 @@ func TestInvocationRenewsAcrossOriginalExpiryThenRevokes(t *testing.T) {
 	if err := c.Wait(); !errors.Is(err, ErrConnectionRevoked) {
 		t.Fatal(err)
 	}
-	if status := c.Status(); status.State != InvocationClosed || status.ActiveLeaseID != "" || !errors.Is(status.LastDisconnectError, ErrConnectionRevoked) {
-		t.Fatalf("revoked status: %+v", status)
-	}
-	if status := c.Status(); !status.ExpiresAt.Equal(c.ExpiresAt()) {
-		t.Fatalf("status did not preserve renewed expiry: %+v", status)
-	}
 	if time.Since(started) < time.Second || !c.ExpiresAt().After(started.Add(time.Second)) {
 		t.Fatal("lease did not advance")
 	}

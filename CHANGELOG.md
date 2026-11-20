@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Expose invocation connection status, operator reconnect attempt counts, and the most recent disconnect and reconnect errors while `Wait()` remains blocked. Reconnect authorization and invocation replay behavior are unchanged.
+- Automatically recover dropped invocation sockets within the authorized lease on recovery-capable brokers, with bounded retries and no replay of interrupted work.
 
 - Send the turn's W3C `traceparent` on proxied model calls, so Prism records their pre- and post-LLM checks under the same turn as the SDK's own checks. A caller's own `traceparent` is kept when no turn trace is set.
 - Report the SDK version from the module version the agent was built with, instead of a fixed `flyedge-go/0.8.0`. Builds without a released version report `flyedge-go/devel`.

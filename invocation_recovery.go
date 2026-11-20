@@ -66,10 +66,6 @@ func (c *InvocationConnection) recover(ctx context.Context, g *Guard, o Invocati
 			delay = max(delay, h.RetryAfter)
 		}
 		// The lease deadline also bounds Retry-After and prevents a late new attempt.
-		c.mu.Lock()
-		c.state = InvocationReconnecting
-		c.nextRetryAt = time.Now().Add(delay)
-		c.mu.Unlock()
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -86,31 +82,13 @@ func (c *InvocationConnection) recover(ctx context.Context, g *Guard, o Invocati
 			}
 			return nil, ctx.Err()
 		}
-		c.mu.Lock()
-		c.nextRetryAt = time.Time{}
-		c.recoveryAttempts++
-		c.mu.Unlock()
 		next, err := g.openInvocationRequest(sessionCtx, o, "", previous)
 		if err == nil {
 			return next, nil
 		}
 		last = err
-		c.mu.Lock()
-		c.lastReconnectError = err
-		c.mu.Unlock()
 		if !retryInvocationRecovery(err) {
 			return nil, err
 		}
 	}
-}
-
-// InvocationHeartbeat contains transport timing only, never invocation payloads.
-// LastFrameAt counts application frames; the library handles control frames internally.
-type InvocationHeartbeat struct {
-	EdgeRay       string // Cloudflare handshake trace ID, when provided by the endpoint.
-	LastPingAt    time.Time
-	LastPongAt    time.Time
-	LastFrameAt   time.Time
-	PingsSent     uint64
-	PongsReceived uint64
 }

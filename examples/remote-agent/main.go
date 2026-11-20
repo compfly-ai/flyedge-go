@@ -74,21 +74,6 @@ func run() error {
 	}
 	defer c.Close()
 	logger.Info("connection.ready", "connection", c.ID, "lease_duration", *leaseDuration, "auto_renew", *autoRenew, "expires", c.ExpiresAt().Format(time.RFC3339))
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				s := c.Status()
-				logger.Info("connection.status", "state", s.State, "connection", s.ActiveLeaseID,
-					"expires", s.ExpiresAt, "heartbeat", s.Heartbeat, "recovery_supported", s.RecoverySupported, "recovery_attempts", s.RecoveryAttempts,
-					"next_retry", s.NextRetryAt, "last_disconnect", s.LastDisconnectError, "last_reconnect", s.LastReconnectError)
-			}
-		}
-	}()
 	return c.Wait()
 }
 func handler(g *flyedge.Guard, baseLogger *slog.Logger) flyedge.InvocationHandler {
