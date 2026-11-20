@@ -4,6 +4,8 @@
 
 - Expose invocation connection status, operator reconnect attempt counts, and the most recent disconnect and reconnect errors while `Wait()` remains blocked. Reconnect authorization and invocation replay behavior are unchanged.
 
+- Send the turn's W3C `traceparent` on proxied model calls, so Prism records their pre- and post-LLM checks under the same turn as the SDK's own checks. A caller's own `traceparent` is kept when no turn trace is set.
+- Report the SDK version from the module version the agent was built with, instead of a fixed `flyedge-go/0.8.0`. Builds without a released version report `flyedge-go/devel`.
 - Fix scenario mock completion: `required_matches: 0` permits an optional mock to be used once without marking evidence incomplete. Required occurrences and unexpected-call rejection are unchanged.
 - Send reverse-invocation WebSocket Pings every 10 seconds instead of 30, while retaining the independent 30-second Pong timeout. This provides margin before a gateway idle timeout; it does not replay interrupted invocations.
 
