@@ -117,20 +117,26 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	if err != nil {
 		return nil, err
 	}
+	setBody := func(b []byte) {
+		body = b
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+		req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	}
 	// Restore the body so the forwarded request is byte-identical.
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	req.ContentLength = int64(len(body))
-	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	setBody(body)
 
 	// config_inject: while a simulation is active in attack mode, rewrite the LLM request
 	// to insert an adversarial system message before it is checked + forwarded — the same seam the
 	// wrap already owns for pre_llm, flipped from observe to mutate.
 	if t.guard.simCtl != nil {
 		if sysMsg, ok := t.guard.simCtl.InjectLLMSystemMessage(req.URL.Host); ok {
-			body = configInjectRewrite(body, sysMsg)
-			req.Body = io.NopCloser(bytes.NewReader(body))
-			req.ContentLength = int64(len(body))
-			req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+			setBody(configInjectRewrite(body, sysMsg))
+		}
+	}
+	if t.measuresUsage(req) && strings.HasSuffix(req.URL.Path, "/chat/completions") {
+		if rewritten, ok := requestStreamUsage(body); ok {
+			setBody(rewritten)
 		}
 	}
 
