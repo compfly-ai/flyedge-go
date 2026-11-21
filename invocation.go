@@ -167,20 +167,51 @@ type invocationFrame struct {
 	Error            string                   `json:"error,omitempty"`
 }
 
+// InvocationState describes the current transport lifecycle, not invocation outcomes.
+type InvocationState string
+
+const (
+	InvocationConnected    InvocationState = "connected"
+	InvocationDisconnected InvocationState = "disconnected"
+	InvocationReconnecting InvocationState = "reconnecting"
+	InvocationClosed       InvocationState = "closed"
+)
+
+// InvocationStatus is a point-in-time snapshot. Historical errors remain available
+// after recovery; State and ActiveLeaseID describe current readiness. ExpiresAt is
+// the last acknowledged lease expiry, including while disconnected or closed.
+type InvocationStatus struct {
+	State               InvocationState
+	ActiveLeaseID       string
+	ExpiresAt           time.Time
+	ReconnectAttempts   uint64
+	RecoverySupported   bool
+	RecoveryAttempts    uint64
+	NextRetryAt         time.Time
+	Heartbeat           InvocationHeartbeat
+	LastDisconnectError error
+	LastReconnectError  error
+}
+
 // InvocationConnection represents a serving session. ID and ContractVersion describe
 // its initial lease. Use ActiveLeaseID to identify the currently connected lease.
 type InvocationConnection struct {
-	ContractVersion string
-	ID              string
-	environment     string
-	reconnect       chan string
-	registered      bool // protected by Guard.invocationMu
-	cancel          context.CancelFunc
-	done            chan struct{}
-	err             error // published before done closes
-	mu              sync.RWMutex
-	lease           *invocationLease
-	connected       bool
+	ContractVersion     string
+	ID                  string
+	environment         string
+	reconnect           chan string
+	registered          bool // protected by Guard.invocationMu
+	cancel              context.CancelFunc
+	done                chan struct{}
+	err                 error // published before done closes
+	mu                  sync.RWMutex
+	lease               *invocationLease
+	state               InvocationState
+	reconnectAttempts   uint64
+	recoveryAttempts    uint64
+	nextRetryAt         time.Time
+	lastDisconnectError error
+	lastReconnectError  error
 }
 
 type invocationLease struct {
@@ -194,6 +225,8 @@ type invocationLease struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	err               error
+	diagnosticsMu     sync.RWMutex
+	heartbeat         InvocationHeartbeat
 }
 
 // ExpiresAt returns the latest acknowledged lease expiry. Automatic renewal advances it.
@@ -207,10 +240,36 @@ func (c *InvocationConnection) ExpiresAt() time.Time {
 func (c *InvocationConnection) ActiveLeaseID() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if !c.connected {
+	if c.state != InvocationConnected {
 		return ""
 	}
 	return c.lease.id
+}
+
+// Status can be polled while Wait is blocked, including while awaiting an
+// operator reconnect. It does not invoke user callbacks or change the connection.
+func (c *InvocationConnection) Status() InvocationStatus {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s := InvocationStatus{
+		State:               c.state,
+		ReconnectAttempts:   c.reconnectAttempts,
+		RecoveryAttempts:    c.recoveryAttempts,
+		NextRetryAt:         c.nextRetryAt,
+		LastDisconnectError: c.lastDisconnectError,
+		LastReconnectError:  c.lastReconnectError,
+	}
+	if c.lease != nil {
+		s.ExpiresAt = c.lease.ExpiresAt()
+		s.RecoverySupported = c.lease.recoverySupported
+		c.lease.diagnosticsMu.RLock()
+		s.Heartbeat = c.lease.heartbeat
+		c.lease.diagnosticsMu.RUnlock()
+		if c.state == InvocationConnected {
+			s.ActiveLeaseID = c.lease.id
+		}
+	}
+	return s
 }
 
 func (c *invocationLease) ExpiresAt() time.Time {
@@ -265,7 +324,7 @@ func (g *Guard) ServeInvocations(ctx context.Context, opts InvocationOptions, ha
 		return nil, errors.New("flyedge: guard closed")
 	}
 	c.ContractVersion, c.ID = lease.contractVersion, lease.id
-	c.lease, c.connected = lease, true
+	c.lease, c.state = lease, InvocationConnected
 	c.registered = true
 	if c.reconnect != nil {
 		g.startConfigPoll()
@@ -303,7 +362,8 @@ func (g *Guard) trackInvocation(c *InvocationConnection) error {
 func (c *InvocationConnection) finish(g *Guard) {
 	c.cancel()
 	c.mu.Lock()
-	c.connected = false
+	c.state = InvocationClosed
+	c.nextRetryAt = time.Time{}
 	c.mu.Unlock()
 	g.invocationMu.Lock()
 	g.invocations = slices.DeleteFunc(g.invocations, func(other *InvocationConnection) bool { return other == c })
@@ -319,7 +379,8 @@ func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts Invocat
 		if lease != nil {
 			lease.serve(g, opts, handler)
 			c.mu.Lock()
-			c.connected = false
+			c.state = InvocationDisconnected
+			c.lastDisconnectError = lease.err
 			c.mu.Unlock()
 			if lease.recoverySupported && errors.Is(lease.err, ErrInvocationOutcomeUnknown) && ctx.Err() == nil {
 				next, err := c.recover(ctx, g, opts, lease)
@@ -327,12 +388,15 @@ func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts Invocat
 					lease = next
 					c.mu.Lock()
 					c.lease = next
-					c.connected = true
+					c.state = InvocationConnected
+					c.nextRetryAt = time.Time{}
 					c.mu.Unlock()
 					continue
 				}
 				c.mu.Lock()
-				c.connected = false
+				c.state = InvocationDisconnected
+				c.nextRetryAt = time.Time{}
+				c.lastReconnectError = err
 				c.mu.Unlock()
 				lease.err = err
 			}
@@ -353,17 +417,19 @@ func (c *InvocationConnection) serve(ctx context.Context, g *Guard, opts Invocat
 			}
 			lastAttempt = request
 			c.mu.Lock()
-			c.connected = false
+			c.state = InvocationReconnecting
+			c.reconnectAttempts++
 			c.mu.Unlock()
 			next, err := g.openInvocation(ctx, opts, request)
 			if err == nil {
 				lease = next
 				c.mu.Lock()
-				c.lease, c.connected = lease, true
+				c.lease, c.state = lease, InvocationConnected
 				c.mu.Unlock()
 			} else {
 				c.mu.Lock()
-				c.connected = false
+				c.state = InvocationDisconnected
+				c.lastReconnectError = err
 				c.mu.Unlock()
 			}
 		}
@@ -488,7 +554,11 @@ func (g *Guard) openInvocationRequest(ctx context.Context, opts InvocationOption
 		}
 		return nil, errors.New("flyedge: invocation connection did not become ready")
 	}
-	return &invocationLease{token: lease.Token, recoverySupported: lease.RecoveryProtocolVersion == 1, contractVersion: lease.ContractVersion, id: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel}, nil
+	edgeRay := ""
+	if dialResponse != nil && len(dialResponse.Header.Get("Cf-Ray")) <= 128 {
+		edgeRay = dialResponse.Header.Get("Cf-Ray")
+	}
+	return &invocationLease{heartbeat: InvocationHeartbeat{EdgeRay: edgeRay}, token: lease.Token, recoverySupported: lease.RecoveryProtocolVersion == 1, contractVersion: lease.ContractVersion, id: lease.ID, expiresAt: lease.ExpiresAt, ws: ws, ctx: cctx, cancel: cancel}, nil
 }
 
 type invocationOutput struct {
@@ -520,7 +590,7 @@ func (c *invocationLease) send(ctx context.Context, f invocationFrame) error {
 // invocationHeartbeat keeps the invocation socket active independently of the
 // HTTP config poller and lease renewal. Ping handles matching pongs; serve's
 // reader must remain active while it waits. Each ping has its own deadline.
-func invocationHeartbeat(ctx context.Context, ws *websocket.Conn, interval, timeout time.Duration) error {
+func invocationHeartbeat(ctx context.Context, ws *websocket.Conn, interval, timeout time.Duration, observe ...func(bool)) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -529,7 +599,13 @@ func invocationHeartbeat(ctx context.Context, ws *websocket.Conn, interval, time
 			return ctx.Err()
 		case <-ticker.C:
 			pingCtx, cancel := context.WithTimeout(ctx, timeout)
+			if len(observe) > 0 {
+				observe[0](false)
+			}
 			err := ws.Ping(pingCtx)
+			if err == nil && len(observe) > 0 {
+				observe[0](true)
+			}
 			cancel()
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -556,7 +632,17 @@ func (c *invocationLease) serve(g *Guard, o InvocationOptions, h InvocationHandl
 	readErr := make(chan error, 1)
 	heartbeatErr := make(chan error, 1)
 	go func() {
-		heartbeatErr <- invocationHeartbeat(c.ctx, c.ws, 10*time.Second, 30*time.Second)
+		heartbeatErr <- invocationHeartbeat(c.ctx, c.ws, 10*time.Second, 30*time.Second, func(pong bool) {
+			c.diagnosticsMu.Lock()
+			defer c.diagnosticsMu.Unlock()
+			if pong {
+				c.heartbeat.LastPongAt = time.Now()
+				c.heartbeat.PongsReceived++
+			} else {
+				c.heartbeat.LastPingAt = time.Now()
+				c.heartbeat.PingsSent++
+			}
+		})
 	}()
 	go func() {
 		for {
@@ -565,6 +651,9 @@ func (c *invocationLease) serve(g *Guard, o InvocationOptions, h InvocationHandl
 				readErr <- err
 				return
 			}
+			c.diagnosticsMu.Lock()
+			c.heartbeat.LastFrameAt = time.Now()
+			c.diagnosticsMu.Unlock()
 			select {
 			case frames <- f:
 			case <-c.ctx.Done():
