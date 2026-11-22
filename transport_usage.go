@@ -46,6 +46,36 @@ func (t *guardRoundTripper) roundTripModel(req *http.Request, model string) (res
 	return resp, err
 }
 
+func (t *guardRoundTripper) measuresUsage(req *http.Request) bool {
+	scope, _ := req.Context().Value(invocationUsageContextKey{}).(*invocationUsage)
+	return scope != nil && scope.guard == t.guard
+}
+
+// Streamed chat completions omit usage unless asked; only an invocation reads it.
+// Other stream_options keys and an explicit include_usage are preserved.
+func requestStreamUsage(body []byte) ([]byte, bool) {
+	var m map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if decoder.Decode(&m) != nil || m["stream"] != true {
+		return nil, false
+	}
+	options, _ := m["stream_options"].(map[string]any)
+	if options == nil {
+		options = map[string]any{}
+	}
+	if options["include_usage"] != nil {
+		return nil, false
+	}
+	options["include_usage"] = true
+	m["stream_options"] = options
+	rewritten, err := json.Marshal(m)
+	if err != nil {
+		return nil, false
+	}
+	return rewritten, true
+}
+
 func knownUsageNumber(m map[string]any, keys ...string) (*uint64, bool) {
 	for _, key := range keys {
 		value, present := m[key]
