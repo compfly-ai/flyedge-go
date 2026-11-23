@@ -4,24 +4,29 @@ The Go SDK shares the existing Python/endpoint receiver contract:
 `content.attachments` in the signed `/v1/flyedge/check` request. Prism and PE do
 not require another decoding route for this sender.
 
-The existing config heartbeat carries `agent_settings.nontext_payload` for the
-authenticated agent. Only exact `allowed`, a resolved agent/namespace and a
-signing identity enable inspection. Missing, null, skipped and invalid settings
-disable it. The in-memory snapshot expires after three heartbeat intervals,
-bounded to 15–900 seconds. There is no extra polling or org-level fallback.
+The SDK sends inline images and PDFs with every check. It has no setting of its
+own. Policy Enforcer inspects attachments only when a control that runs at that
+stage has image and PDF processing turned on for the agent; otherwise it answers
+`skipped_no_controls` and evaluates the text alone.
 
-`WrapRoundTripper` checks permission before extracting inline provider blocks.
-Tool helpers use the same normalization and a separate text-only view. Disabling
-inspection removes attachment bytes from policy checks while preserving the
-original provider/tool input. Plain encoded user text keeps its existing text
-route; it is not decoded as an attachment. URL/file references are unresolved;
-the SDK never fetches a URL or reads an arbitrary local path to obtain bytes.
+`WrapRoundTripper` extracts inline provider blocks before the check. Tool helpers
+use the same normalization and a separate text-only view, so attachment bytes
+never enter policy text while the original provider/tool input is preserved.
+Plain encoded user text keeps its existing text route; it is not decoded as an
+attachment. URL/file references are unresolved; the SDK never fetches a URL or
+reads an arbitrary local path to obtain bytes.
 
 Normalization bounds recursion, visited nodes and transport size (16 MiB encoded
 budget). Attachment bytes contribute to the content hash. The allow path requires
-`nontext_status=decoded` or the explicit receiver oversize-skip acknowledgment.
-Missing acknowledgment and technical media errors retry text-only once. If that retry
-is unavailable, the configured FailMode applies: FailClosed blocks and FailOpen allows.
+`nontext_status` of `decoded`, `skipped_no_controls` or `skipped_oversize` (the
+agent's controls let files over their size limit through uninspected).
+A request with attachments is never re-checked without them. A missing
+acknowledgment or a technical media error follows the configured FailMode:
+FailClosed blocks and FailOpen allows. A `nontext_uninspected` or
+`nontext_limit_exceeded` denial from the Policy Enforcer stands.
+`WithoutAttachments()` keeps media out of every check a Guard sends, with the
+same text view; a host that owns media inspection elsewhere uses it so each
+attachment is sent once.
 Explicit control denials and kill switches still enforce. A proxy-mode media request first
 uses the same SDK check, then follows its original route. No provider settings
 are changed.
@@ -59,14 +64,3 @@ browser upload picker still needs manual user verification because Chrome file
 URL access is disabled. The pre-existing local audit bridge duplicates some
 policy denial rows; one carries the media context. No platform source changes,
 commits, PRs or cloud rollout were made for this Go validation.
-
-## Applied-setting acknowledgment
-
-With platform PR #279, config polling reads the authoritative saved preference
-instead of the LEAD/Redis copy. The SDK rejects older `agent_settings_revision`
-values and sends `X-Agent-Payload-Revision` after applying a revision, while the
-snapshot is valid. Missing settings revoke permission and acknowledgment while
-retaining the revision high-watermark. The console distinguishes saved/pending
-from acknowledgment by one SDK instance; it does not claim every instance has
-refreshed. Explicit `WithAttachments` is independent and never acknowledges a
-remote preference. Backend/Prism and SDK rollout is required for confirmation.

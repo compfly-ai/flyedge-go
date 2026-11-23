@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Always send inline images and PDFs as `content.attachments`. Policy Enforcer decides from the agent's controls whether to inspect them and acknowledges a skip as `skipped_no_controls`. The per-agent `nontext_payload` setting and the `X-Agent-Payload-Revision` acknowledgment are removed, along with `WithAttachments` and `NontextPayloadAllowed`. A request with attachments is no longer retried text-only after a media failure; the failure follows FailMode. `WithoutAttachments()` builds a Guard that never sends attachments, for a host that inspects media through a separate Guard.
+
 ## 0.11.3
 
 - Request usage in streamed OpenAI Chat Completions during admitted invocations, preserving explicit caller options and leaving calls outside invocations unchanged.

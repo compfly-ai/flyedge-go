@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -44,9 +43,6 @@ type SimulationConfig struct {
 // them when null).
 type flyedgeConfigResponse struct {
 	InvocationReconnectRequests map[string]string `json:"invocation_reconnect_requests,omitempty"`
-	AgentSettingsRevision       *uint64           `json:"agent_settings_revision,omitempty"`
-	AgentSettings               map[string]any    `json:"agent_settings,omitempty"`
-	AgentSlug                   string            `json:"agent_slug,omitempty"`
 	NamespaceID                 string            `json:"namespace_id,omitempty"`
 	Simulation                  *SimulationConfig `json:"simulation,omitempty"`
 	ManifestRefreshRequired     *bool             `json:"manifest_refresh_required,omitempty"`
@@ -204,31 +200,6 @@ func (g *Guard) pollOnce(getter signedGetter) {
 // handler), tracks the simulation block (firing the internal sim hook on change), and honors a
 // manifest-refresh request (default: re-Connect).
 func (g *Guard) applyConfig(cr flyedgeConfigResponse) {
-	g.pollMu.Lock()
-	ttl := 3 * g.pollInterval
-	if ttl < 15*time.Second {
-		ttl = 15 * time.Second
-	}
-	if ttl > 900*time.Second {
-		ttl = 900 * time.Second
-	}
-	if g.nontextDID != g.DID() {
-		g.nontextRevision = 0
-	}
-	// Ignore stale media settings without suppressing unrelated config updates.
-	if cr.AgentSettingsRevision == nil || *cr.AgentSettingsRevision >= g.nontextRevision {
-		g.nontextAckRevision = 0
-		if cr.AgentSettingsRevision != nil {
-			g.nontextRevision = *cr.AgentSettingsRevision
-			if g.DID() != "" && cr.AgentSlug != "" && cr.NamespaceID != "" && cr.AgentSettings != nil && !g.nontextAlways {
-				g.nontextAckRevision = *cr.AgentSettingsRevision
-			}
-		}
-		g.nontextAllowed = (g.nontextRevision == 0 || cr.AgentSettingsRevision != nil) && g.DID() != "" && cr.AgentSlug != "" && cr.NamespaceID != "" && cr.AgentSettings["nontext_payload"] == "allowed"
-		g.nontextDID = g.DID()
-		g.nontextExpires = time.Now().Add(ttl)
-	}
-	g.pollMu.Unlock()
 	g.applyModelMode(cr.ModelMode, cr.ModelModeSource)
 
 	simHash := hashSim(cr.Simulation)
@@ -283,14 +254,6 @@ func (g *Guard) deliverInvocationReconnectRequests(requests map[string]string) {
 	}
 }
 
-// NontextPayloadAllowed reads the existing heartbeat's expiring, per-agent permission.
-// Missing/invalid settings and stale permission never enable attachment inspection.
-func (g *Guard) NontextPayloadAllowed() bool {
-	g.pollMu.RLock()
-	defer g.pollMu.RUnlock()
-	return g.nontextAlways || g.nontextAllowed && g.nontextDID == g.DID() && time.Now().Before(g.nontextExpires)
-}
-
 // heartbeatHeaders builds the X-Agent-* headers prism reads on the config GET: the heartbeat marker
 // (refreshes presence TTL), the current manifest hash (drift compare), and the hostname.
 func (g *Guard) heartbeatHeaders() map[string]string {
@@ -298,9 +261,6 @@ func (g *Guard) heartbeatHeaders() map[string]string {
 	defer g.pollMu.RUnlock()
 	headers := map[string]string{
 		"X-Agent-Heartbeat": "1", "X-Agent-Manifest-Hash": g.manifestHash, "X-Agent-Hostname": g.hostname,
-	}
-	if g.nontextAckRevision > 0 && g.nontextDID == g.DID() && time.Now().Before(g.nontextExpires) {
-		headers["X-Agent-Payload-Revision"] = strconv.FormatUint(g.nontextAckRevision, 10)
 	}
 	return headers
 }

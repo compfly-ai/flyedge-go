@@ -219,36 +219,27 @@ func jsonValue(v any) any {
 
 func (g *Guard) mediaContent(value any) Content {
 	value = jsonValue(value)
-	// Permission precedes normalization, hashing and attachment forwarding.
-	var attachments []Attachment
-	if g.NontextPayloadAllowed() {
-		if encoded, ok := value.(string); ok && len(encoded) <= mediaTransportLimit {
-			var decoded any
-			if json.Unmarshal([]byte(encoded), &decoded) == nil {
-				value = decoded
-			}
+	if encoded, ok := value.(string); ok && len(encoded) <= mediaTransportLimit {
+		var decoded any
+		if json.Unmarshal([]byte(encoded), &decoded) == nil {
+			value = decoded
 		}
-		attachments = ExtractAttachments(value)
 	}
-	return Content{Full: jsonString(policyValue(value, 0)), Attachments: attachments}
+	content := Content{Full: jsonString(policyValue(value, 0))}
+	if !g.noAttachments {
+		content.Attachments = ExtractAttachments(value)
+	}
+	return content
 }
 
 func mediaAcknowledgment(dec Decision) (string, bool) {
 	var metadata struct {
-		Status     string `json:"nontext_status"`
-		Evaluation string `json:"evaluation_status"`
+		Status string `json:"nontext_status"`
 	}
 	if encoded, ok := dec.Detail["intent_metadata_json"].(string); ok {
 		_ = json.Unmarshal([]byte(encoded), &metadata)
 	}
-	return metadata.Status, metadata.Status == "decoded" || (metadata.Status == "skipped_oversize" && metadata.Evaluation == "skipped" && dec.Reason == "nontext_oversize_skipped")
-}
-
-// Technical media decisions are availability failures, not control denials.
-func mediaInspectionUnavailable(dec Decision) bool {
-	if dec.Reason == "nontext_uninspected" || dec.Reason == "nontext_limit_exceeded" || string(dec.Action) == "indeterminate" {
-		return true
-	}
-	_, confirmed := mediaAcknowledgment(dec)
-	return dec.Action != ActionDeny && !confirmed
+	// skipped_no_controls: no control at this stage reads attachment content. skipped_oversize: the
+	// controls that do let files over their size limit through uninspected (fail_open).
+	return metadata.Status, metadata.Status == "decoded" || metadata.Status == "skipped_no_controls" || metadata.Status == "skipped_oversize"
 }
