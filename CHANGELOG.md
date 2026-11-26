@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Always send inline images and PDFs as `content.attachments`. Policy Enforcer decides from the agent's controls whether to inspect them and acknowledges a skip as `skipped_no_controls`. The per-agent `nontext_payload` setting and the `X-Agent-Payload-Revision` acknowledgment are removed, along with `WithAttachments` and `NontextPayloadAllowed`. A request with attachments is no longer retried text-only after a media failure; the failure follows FailMode. `WithoutAttachments()` builds a Guard that never sends attachments, for a host that inspects media through a separate Guard.
+- A check answered with `indeterminate`, an empty decision or a decision this client does not know now follows FailMode, as in the Rust client: fail-closed denies with the server's reason (default `indeterminate`), fail-open allows with `fail_open`. Before, any such answer became an allow, and with a media acknowledgement it also passed the attachment check. The enforce client reports it as `*enforce.UndecidedError`.
 
 ## 0.11.3
 

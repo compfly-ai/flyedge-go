@@ -351,11 +351,26 @@ func (g *Guard) Check(ctx context.Context, req CheckRequest) (decision Decision,
 	ev := telemetry.Event{Stage: string(req.Stage), Model: req.Operation.ModelID, LatencyMS: latencyMS, OccurredAt: start, SessionID: req.SessionID, RequestID: req.RequestID, TraceID: traceID, SpanID: spanID, ParentSpanID: parentSpan}
 
 	var killed *enforce.KilledError
+	var undecided *enforce.UndecidedError
 	switch {
 	case errors.As(cerr, &killed):
 		// Kill switch ALWAYS enforces — never fail-open. Distinct typed error.
 		result = Decision{Action: ActionDeny, Reason: "kill_switch", Message: killed.Error(), Kills: []KillInfo{killed.Kill}}
 		retErr = &KillSwitchError{Kills: result.Kills}
+	case errors.As(cerr, &undecided):
+		// The check ran but did not resolve (indeterminate, empty or unknown verdict): the same
+		// fail mode as an unreachable gateway, keeping the server's detail on a deny.
+		ev.Err = cerr.Error()
+		if g.cfg.FailMode == FailClosed {
+			result = dec
+			result.Action = ActionDeny
+			if result.Reason == "" {
+				result.Reason = "indeterminate"
+			}
+			retErr = &DenyError{Decision: result}
+		} else {
+			result = Decision{Action: ActionAllow, Reason: "fail_open", Message: dec.Message, RequestID: dec.RequestID}
+		}
 	case cerr != nil:
 		ev.Err = cerr.Error()
 		if g.cfg.FailMode == FailClosed {

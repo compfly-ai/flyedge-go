@@ -232,6 +232,15 @@ type Signals struct {
 	Missing []string
 }
 
+// knownDecision reports a verdict this client can act on. Anything else is undecided, never allow.
+func knownDecision(d string) bool {
+	switch d {
+	case "allow", "deny", "block", "warn":
+		return true
+	}
+	return false
+}
+
 // normalize maps a raw response into a Decision. deny and block both become ActionDeny.
 func (r checkResponse) normalize() Decision {
 	act := ActionAllow
