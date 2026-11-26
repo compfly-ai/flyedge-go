@@ -49,81 +49,30 @@ func mediaGuard(t *testing.T, checker *mediaChecker, mode FailMode) *Guard {
 	t.Cleanup(func() { g.Close() })
 	return g
 }
-func allowMedia(g *Guard) {
-	g.applyConfig(flyedgeConfigResponse{AgentSlug: "support", NamespaceID: "ns", AgentSettings: map[string]any{"nontext_payload": "allowed"}})
-}
-
-func TestMediaPermissionDefaultsRevocationAndExpiry(t *testing.T) {
-	g := mediaGuard(t, &mediaChecker{}, FailOpen)
-	if g.NontextPayloadAllowed() {
-		t.Fatal("unset permission allowed")
-	}
-	for _, v := range []any{nil, "", "skipped", "denied", true, "ALLOWED", map[string]any{}} {
-		allowMedia(g)
-		g.applyConfig(flyedgeConfigResponse{AgentSlug: "support", NamespaceID: "ns", AgentSettings: map[string]any{"nontext_payload": v}})
-		if g.NontextPayloadAllowed() {
-			t.Fatalf("invalid permission enabled: %v", v)
-		}
-	}
-	allowMedia(g)
-	if !g.NontextPayloadAllowed() {
-		t.Fatal("explicit permission not applied")
-	}
-	g.pollMu.Lock()
-	g.nontextExpires = time.Now().Add(-time.Second)
-	g.pollMu.Unlock()
-	if g.NontextPayloadAllowed() {
-		t.Fatal("expired permission retained")
-	}
-	allowMedia(g)
-	g.applyConfig(flyedgeConfigResponse{})
-	if g.NontextPayloadAllowed() {
-		t.Fatal("omitted settings did not revoke")
-	}
-}
-
-func TestWithAttachmentsSendsWithoutAgentSetting(t *testing.T) {
-	rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
-	g, err := New(Config{}, WithSigner(mediaSigner{}), WithEnforcer(rec), WithAttachments())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { g.Close() })
-	g.applyConfig(flyedgeConfigResponse{AgentSlug: "support", NamespaceID: "ns", AgentSettings: map[string]any{"nontext_payload": "skipped"}})
-	dec, err := g.Check(context.Background(), CheckRequest{Content: Content{Full: "caption", Attachments: []Attachment{{ID: "a", MediaType: "image/png", DataBase64: "c3ludGhldGlj"}}}})
-	if err != nil || len(rec.requests) != 1 || len(rec.requests[0].Content.Attachments) != 1 || dec.NontextStatus != "decoded" {
-		t.Fatalf("WithAttachments must send attachments without the agent setting: checks=%d dec=%+v err=%v", len(rec.requests), dec, err)
-	}
-}
 
 const mediaBody = `{"model":"gpt-4o-mini","messages":[{"role":"user","content":[{"type":"text","text":"Read this"},{"type":"image_url","image_url":{"url":"data:image/png;base64,c3ludGhldGlj"}}]}]}`
 
-func TestMediaTransportGatedAndProviderInputPreserved(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
-		g := mediaGuard(t, rec, FailOpen)
-		if enabled {
-			allowMedia(g)
-		}
-		base := &mediaProvider{}
-		req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", strings.NewReader(mediaBody))
-		_, err := g.WrapRoundTripper(base).RoundTrip(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if base.body != mediaBody {
-			t.Fatal("provider body was changed")
-		}
-		if len(rec.requests) != 1 {
-			t.Fatalf("checks=%d", len(rec.requests))
-		}
-		payload := rec.requests[0].Content
-		if (len(payload.Attachments) > 0) != enabled {
-			t.Fatal("permission did not gate media")
-		}
-		if strings.Contains(payload.Full, "c3ludGhldGlj") {
-			t.Fatal("binary leaked into policy text")
-		}
+func TestMediaTransportSendsAttachmentsAndPreservesProviderInput(t *testing.T) {
+	rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
+	g := mediaGuard(t, rec, FailOpen)
+	base := &mediaProvider{}
+	req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", strings.NewReader(mediaBody))
+	_, err := g.WrapRoundTripper(base).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.body != mediaBody {
+		t.Fatal("provider body was changed")
+	}
+	if len(rec.requests) != 1 {
+		t.Fatalf("checks=%d", len(rec.requests))
+	}
+	payload := rec.requests[0].Content
+	if len(payload.Attachments) == 0 {
+		t.Fatal("inline media not sent")
+	}
+	if strings.Contains(payload.Full, "c3ludGhldGlj") {
+		t.Fatal("binary leaked into policy text")
 	}
 }
 
@@ -140,9 +89,8 @@ func TestMediaAvailabilityAndExplicitDeny(t *testing.T) {
 				rec.decision.Detail = map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}
 			}
 			g := mediaGuard(t, rec, mode)
-			allowMedia(g)
 			dec, err := g.Check(context.Background(), CheckRequest{Content: Content{Full: "caption", Attachments: []Attachment{{ID: "a", MediaType: "image/png", DataBase64: "c3ludGhldGlj"}}}})
-			wantDeny := reason == "deny" || (reason == "transport" && mode == FailClosed)
+			wantDeny := reason == "deny" || (reason != "decoded" && mode == FailClosed)
 			if (err != nil) != wantDeny || (dec.Action == ActionDeny) != wantDeny {
 				t.Fatalf("%s/%s unexpected verdict: %+v %v", mode, reason, dec, err)
 			}
@@ -153,56 +101,45 @@ func TestMediaAvailabilityAndExplicitDeny(t *testing.T) {
 	}
 }
 
-type mediaRetryChecker struct {
-	mediaChecker
-	firstErr error
-}
-
-func (m *mediaRetryChecker) Check(ctx context.Context, r CheckRequest) (Decision, error) {
-	if len(m.requests) == 0 {
-		m.requests = append(m.requests, r)
-		return Decision{Action: ActionAllow}, m.firstErr
+func TestMediaFailureNeverRetriesTextOnly(t *testing.T) {
+	ack := func(status string) map[string]any {
+		return map[string]any{"intent_metadata_json": `{"nontext_status":"` + status + `"}`}
 	}
-	return m.mediaChecker.Check(ctx, r)
-}
-
-func TestMediaTextRetryHonorsFailMode(t *testing.T) {
+	cases := map[string]struct {
+		decision Decision
+		err      error
+		denyOpen bool // verdict under FailOpen; FailClosed denies every case but skipped_no_controls
+	}{
+		"transport":           {decision: Decision{Action: ActionAllow}, err: errors.New("503 unavailable")},
+		"unacknowledged":      {decision: Decision{Action: ActionAllow, Detail: ack("uninspected")}},
+		"uninspected deny":    {decision: Decision{Action: ActionDeny, Reason: "nontext_uninspected"}, denyOpen: true},
+		"limit deny":          {decision: Decision{Action: ActionDeny, Reason: "nontext_limit_exceeded"}, denyOpen: true},
+		"skipped_no_controls": {decision: Decision{Action: ActionAllow, Detail: ack("skipped_no_controls")}},
+	}
 	for _, mode := range []FailMode{FailOpen, FailClosed} {
-		for _, firstErr := range []error{nil, errors.New("media unavailable")} {
-			for _, outcome := range []string{"allow", "deny", "unavailable"} {
-				rec := &mediaRetryChecker{firstErr: firstErr, mediaChecker: mediaChecker{decision: Decision{Action: ActionAllow}}}
-				if outcome == "deny" {
-					rec.decision = Decision{Action: ActionDeny, Reason: "text-policy"}
-				} else if outcome == "unavailable" {
-					rec.err = errors.New("text unavailable")
-				}
-				g, err := New(Config{FailMode: mode}, WithSigner(mediaSigner{}), WithEnforcer(rec), WithAttachments())
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() { g.Close() })
-				base := &mediaProvider{}
-				req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", strings.NewReader(mediaBody))
-				resp, err := g.WrapRoundTripper(base).RoundTrip(req)
-				wantDeny := outcome == "deny" || (outcome == "unavailable" && mode == FailClosed)
-				var denied *DenyError
-				if errors.As(err, &denied) != wantDeny || (base.calls == 0) != wantDeny {
-					t.Fatalf("mode=%s firstErr=%v outcome=%s: calls=%d err=%v", mode, firstErr, outcome, base.calls, err)
-				}
-				if !wantDeny && err != nil {
-					t.Fatal(err)
-				}
-				if resp != nil {
-					resp.Body.Close()
-				}
-				if len(rec.requests) != 2 || len(rec.requests[0].Content.Attachments) != 1 || len(rec.requests[1].Content.Attachments) != 0 {
-					t.Fatalf("expected one media check followed by one text check: %+v", rec.requests)
-				}
-				if rec.requests[0].Content.Full != rec.requests[1].Content.Full || rec.requests[0].RequestID == rec.requests[1].RequestID {
-					t.Fatal("text retry must preserve text with a fresh request ID")
-				}
+		for name, c := range cases {
+			rec := &mediaChecker{decision: c.decision, err: c.err}
+			g := mediaGuard(t, rec, mode)
+			base := &mediaProvider{}
+			req, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", strings.NewReader(mediaBody))
+			resp, err := g.WrapRoundTripper(base).RoundTrip(req)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			wantDeny := c.denyOpen || (mode == FailClosed && name != "skipped_no_controls")
+			var denied *DenyError
+			if errors.As(err, &denied) != wantDeny || (base.calls == 0) != wantDeny {
+				t.Errorf("mode=%s %s: provider calls=%d err=%v, want deny=%v", mode, name, base.calls, err, wantDeny)
+			}
+			if len(rec.requests) != 1 || len(rec.requests[0].Content.Attachments) != 1 {
+				t.Errorf("mode=%s %s: want one check carrying the attachment, got %d checks", mode, name, len(rec.requests))
 			}
 		}
+	}
+	rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: ack("skipped_no_controls")}}
+	dec, err := mediaGuard(t, rec, FailClosed).Check(context.Background(), CheckRequest{Content: Content{Full: "caption", Attachments: []Attachment{{ID: "a", MediaType: "image/png", DataBase64: "c3ludGhldGlj"}}}})
+	if err != nil || dec.Action != ActionAllow || dec.NontextStatus != "skipped_no_controls" {
+		t.Fatalf("skipped_no_controls must allow and keep its status: %+v %v", dec, err)
 	}
 }
 
@@ -224,7 +161,66 @@ func TestMediaShapeLimitsAndNoLocalResolution(t *testing.T) {
 	}
 }
 
-func TestToolMediaTextSanitizedWhenPermissionOff(t *testing.T) {
+func zeroPDFBase64(size int) string {
+	return strings.Repeat("A", size/3*4) + []string{"", "AA==", "AAA="}[size%3]
+}
+
+func pdfAttachments(t *testing.T, sizes ...int) []Attachment {
+	t.Helper()
+	var blocks []any
+	for _, size := range sizes {
+		blocks = append(blocks, map[string]any{"type": "input_file", "file_data": "data:application/pdf;base64," + zeroPDFBase64(size)})
+	}
+	items := ExtractAttachments([]any{map[string]any{"role": "user", "content": blocks}})
+	body, _ := json.Marshal(CheckRequest{Content: Content{Full: "read these", Attachments: items}})
+	if len(body) >= 40<<20 {
+		t.Fatalf("check body %d bytes, over Prism's 40 MiB limit", len(body))
+	}
+	return items
+}
+
+func TestFilesUpTo25MiBReachPEAsBytes(t *testing.T) {
+	for _, sizes := range [][]int{{12 << 20}, {25 << 20}, {2621440, 2621440, 2621440, 2621440, 2621440, 2621440, 2621440, 2621440, 2621440, 2621440}} {
+		items := pdfAttachments(t, sizes...)
+		if len(items) != len(sizes) {
+			t.Fatalf("%d attachments for %d files", len(items), len(sizes))
+		}
+		for i, item := range items {
+			if item.DataBase64 != zeroPDFBase64(sizes[i]) || item.Oversize != nil {
+				t.Fatalf("file %d of %d bytes was not sent as bytes", i, sizes[i])
+			}
+		}
+	}
+}
+
+func TestFilesPastTheWireBudgetGoAsFileMarkersPEAccepts(t *testing.T) {
+	marker := func(item Attachment) string {
+		raw, _ := json.Marshal(item)
+		return string(raw)
+	}
+	items := pdfAttachments(t, 25<<20, 10<<20, 3)
+	if len(items) != 3 || items[0].DataBase64 != zeroPDFBase64(25<<20) || items[2].DataBase64 != "AAAA" {
+		t.Fatal("the files that fit must keep their bytes")
+	}
+	if got := marker(items[1]); got != `{"id":"attachment-2","media_type":"application/pdf","data_base64":"","oversize":{"observed_bytes":10485760,"scope":"file"}}` {
+		t.Fatal(got)
+	}
+	items = pdfAttachments(t, 30<<20)
+	if got := marker(items[0]); len(items) != 1 || got != `{"id":"attachment-1","media_type":"application/pdf","data_base64":"","oversize":{"observed_bytes":31457280,"scope":"file"}}` {
+		t.Fatal(got)
+	}
+	sizes := make([]int, maxAttachments+1)
+	for i := range sizes {
+		sizes[i] = 3
+	}
+	items = pdfAttachments(t, sizes...)
+	// PE's validator requires exactly this shape for a count marker.
+	if got := marker(items[0]); len(items) != 1 || got != `{"id":"attachment-count","media_type":"unresolved","data_base64":"","oversize":{"limit_attachments":10,"observed_attachments":11,"scope":"attachment_count"}}` {
+		t.Fatal(got)
+	}
+}
+
+func TestToolMediaSentAsAttachmentNotText(t *testing.T) {
 	rec := &mediaChecker{decision: Decision{Action: ActionAllow}}
 	g := mediaGuard(t, rec, FailOpen)
 	input := map[string]any{"image": map[string]any{"type": "image", "source": map[string]any{"media_type": "image/png", "data": "c3ludGhldGlj"}}, "query": "summarize"}
@@ -232,8 +228,8 @@ func TestToolMediaTextSanitizedWhenPermissionOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(rec.requests[0].Content.Full, "c3ludGhldGlj") || strings.Contains(rec.requests[0].Operation.ToolArgsJSON, "c3ludGhldGlj") || len(rec.requests[0].Content.Attachments) > 0 {
-		t.Fatal("disabled tool media forwarded")
+	if strings.Contains(rec.requests[0].Content.Full, "c3ludGhldGlj") || strings.Contains(rec.requests[0].Operation.ToolArgsJSON, "c3ludGhldGlj") || len(rec.requests[0].Content.Attachments) != 1 {
+		t.Fatal("tool media must leave the text view and travel as one attachment")
 	}
 	if input["image"].(map[string]any)["source"].(map[string]any)["data"] != "c3ludGhldGlj" {
 		t.Fatal("original input mutated")
@@ -244,21 +240,16 @@ func TestSerializedToolMediaDoesNotEnterAuditText(t *testing.T) {
 	value := `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"c3ludGhldGlj"}}`
 	rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
 	g := mediaGuard(t, rec, FailOpen)
-	for _, allowed := range []bool{false, true} {
-		if allowed {
-			allowMedia(g)
-		}
-		_, err := g.CheckToolCall(context.Background(), "fixture", "image_tool", value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		request := rec.requests[len(rec.requests)-1]
-		if strings.Contains(request.Content.Full, "c3ludGhldGlj") || strings.Contains(request.Operation.ToolArgsJSON, "c3ludGhldGlj") {
-			t.Fatal("encoded source entered text")
-		}
-		if (len(request.Content.Attachments) > 0) != allowed {
-			t.Fatal("serialized tool bytes not gated")
-		}
+	_, err := g.CheckToolCall(context.Background(), "fixture", "image_tool", value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := rec.requests[len(rec.requests)-1]
+	if strings.Contains(request.Content.Full, "c3ludGhldGlj") || strings.Contains(request.Operation.ToolArgsJSON, "c3ludGhldGlj") {
+		t.Fatal("encoded source entered text")
+	}
+	if len(request.Content.Attachments) == 0 {
+		t.Fatal("serialized tool media not sent")
 	}
 }
 
@@ -276,34 +267,29 @@ func TestPlainTextEncodedInputKeepsExistingRoute(t *testing.T) {
 }
 
 func TestToolDocumentTextStaysVisibleToPolicy(t *testing.T) {
-	for _, allowed := range []bool{false, true} {
-		rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
-		g := mediaGuard(t, rec, FailOpen)
-		if allowed {
-			allowMedia(g)
-		}
-		input := map[string]any{
-			"plain":  map[string]any{"type": "document", "text": "sensitive content"},
-			"source": map[string]any{"type": "document", "source": map[string]any{"type": "text", "media_type": "text/plain", "data": "quarterly figures"}},
-			"image":  map[string]any{"type": "image", "caption": "scanned form", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "c3ludGhldGlj"}},
-		}
-		if _, err := g.CheckToolCall(context.Background(), "s", "files", input); err != nil {
-			t.Fatal(err)
-		}
-		r := rec.requests[0]
-		for _, s := range []string{r.Content.Full, r.Operation.ToolArgsJSON} {
-			for _, want := range []string{"sensitive content", "quarterly figures", "scanned form"} {
-				if !strings.Contains(s, want) {
-					t.Fatalf("allowed=%v: text %q hidden from policy: %s", allowed, want, s)
-				}
-			}
-			if strings.Contains(s, "c3ludGhldGlj") {
-				t.Fatalf("allowed=%v: image bytes entered policy text", allowed)
+	rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
+	g := mediaGuard(t, rec, FailOpen)
+	input := map[string]any{
+		"plain":  map[string]any{"type": "document", "text": "sensitive content"},
+		"source": map[string]any{"type": "document", "source": map[string]any{"type": "text", "media_type": "text/plain", "data": "quarterly figures"}},
+		"image":  map[string]any{"type": "image", "caption": "scanned form", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "c3ludGhldGlj"}},
+	}
+	if _, err := g.CheckToolCall(context.Background(), "s", "files", input); err != nil {
+		t.Fatal(err)
+	}
+	r := rec.requests[0]
+	for _, s := range []string{r.Content.Full, r.Operation.ToolArgsJSON} {
+		for _, want := range []string{"sensitive content", "quarterly figures", "scanned form"} {
+			if !strings.Contains(s, want) {
+				t.Fatalf("text %q hidden from policy: %s", want, s)
 			}
 		}
-		if len(r.Content.Attachments) != map[bool]int{false: 0, true: 1}[allowed] {
-			t.Fatalf("allowed=%v: attachments=%d", allowed, len(r.Content.Attachments))
+		if strings.Contains(s, "c3ludGhldGlj") {
+			t.Fatalf("image bytes entered policy text")
 		}
+	}
+	if len(r.Content.Attachments) != 1 {
+		t.Fatalf("attachments=%d", len(r.Content.Attachments))
 	}
 }
 
@@ -333,65 +319,61 @@ func TestTypedToolInputMediaInspected(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, allowed := range []bool{false, true} {
-			rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
-			g := mediaGuard(t, rec, FailOpen)
-			if allowed {
-				allowMedia(g)
-			}
-			if _, err := g.CheckToolCall(context.Background(), "s", "files", input); err != nil {
-				t.Fatal(err)
-			}
-			r := rec.requests[0]
-			if strings.Contains(r.Content.Full, "c3ludGhldGlj") || strings.Contains(r.Operation.ToolArgsJSON, "c3ludGhldGlj") {
-				t.Fatalf("allowed=%v: typed input bytes entered policy text", allowed)
-			}
-			if !strings.Contains(r.Content.Full, "summarize") || !strings.Contains(r.Content.Full, "9007199254740993") {
-				t.Fatalf("allowed=%v: typed input text changed: %s", allowed, r.Content.Full)
-			}
-			if len(r.Content.Attachments) != map[bool]int{false: 0, true: 1}[allowed] {
-				t.Fatalf("allowed=%v: attachments=%d", allowed, len(r.Content.Attachments))
-			}
-			after, err := json.Marshal(input)
-			if err != nil || string(after) != string(original) {
-				t.Fatal("original tool input mutated")
-			}
+		rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
+		g := mediaGuard(t, rec, FailOpen)
+		if _, err := g.CheckToolCall(context.Background(), "s", "files", input); err != nil {
+			t.Fatal(err)
+		}
+		r := rec.requests[0]
+		if strings.Contains(r.Content.Full, "c3ludGhldGlj") || strings.Contains(r.Operation.ToolArgsJSON, "c3ludGhldGlj") {
+			t.Fatalf("typed input bytes entered policy text")
+		}
+		if !strings.Contains(r.Content.Full, "summarize") || !strings.Contains(r.Content.Full, "9007199254740993") {
+			t.Fatalf("typed input text changed: %s", r.Content.Full)
+		}
+		if len(r.Content.Attachments) != 1 {
+			t.Fatalf("attachments=%d", len(r.Content.Attachments))
+		}
+		after, err := json.Marshal(input)
+		if err != nil || string(after) != string(original) {
+			t.Fatal("original tool input mutated")
 		}
 	}
 }
 
-func TestMediaSettingsAcknowledgmentAndRevisionOrdering(t *testing.T) {
-	g := mediaGuard(t, &mediaChecker{}, FailOpen)
-	apply := func(revision uint64, value string) {
-		g.applyConfig(flyedgeConfigResponse{AgentSlug: "support", NamespaceID: "ns", AgentSettingsRevision: &revision, AgentSettings: map[string]any{"nontext_payload": value}})
-	}
-	assert := func(allowed bool, ack string) {
-		t.Helper()
-		if g.NontextPayloadAllowed() != allowed || g.heartbeatHeaders()["X-Agent-Payload-Revision"] != ack {
-			t.Fatalf("allowed=%v headers=%v", g.NontextPayloadAllowed(), g.heartbeatHeaders())
+func TestMediaAcknowledgmentAcceptsNoControlsSkip(t *testing.T) {
+	for status, want := range map[string]bool{"decoded": true, "skipped_no_controls": true, "uninspected": false, "skipped_disabled": false, "skipped_oversize": true} {
+		dec := Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"` + status + `"}`}}
+		if _, ok := mediaAcknowledgment(dec); ok != want {
+			t.Errorf("%s acknowledged=%v, want %v", status, ok, want)
 		}
 	}
-	apply(1, "allowed")
-	assert(true, "1")
-	apply(2, "denied")
-	assert(false, "2")
-	apply(1, "allowed")
-	assert(false, "2")
-	// An unavailable source disables capture and clears acknowledgment, retaining the high-watermark.
-	g.applyConfig(flyedgeConfigResponse{})
-	assert(false, "")
-	apply(1, "allowed")
-	assert(false, "")
-	allowMedia(g)
-	assert(false, "")
-	apply(3, "allowed")
-	assert(true, "3")
-	g.pollMu.Lock()
-	g.nontextExpires = time.Now().Add(-time.Second)
-	g.pollMu.Unlock()
-	assert(false, "")
-	// Explicit attachment mode is independent of the remote preference and must not acknowledge it.
-	g.nontextAlways = true
-	apply(4, "denied")
-	assert(true, "")
+}
+
+func TestWithoutAttachmentsKeepsTextAndSendsNoMedia(t *testing.T) {
+	value := map[string]any{"caption": "chart", "image": map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,c3ludGhldGlj"}}}
+	full := ""
+	for _, without := range []bool{false, true} {
+		rec := &mediaChecker{decision: Decision{Action: ActionAllow, Detail: map[string]any{"intent_metadata_json": `{"nontext_status":"decoded"}`}}}
+		opts := []Option{WithSigner(mediaSigner{}), WithEnforcer(rec)}
+		if without {
+			opts = append(opts, WithoutAttachments())
+		}
+		g, err := New(Config{FailMode: FailClosed}, opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { g.Close() })
+		if _, err := g.CheckToolResponse(context.Background(), "s", "render", value); err != nil {
+			t.Fatal(err)
+		}
+		sent := rec.requests[len(rec.requests)-1].Content
+		if got := len(sent.Attachments); got != map[bool]int{false: 1, true: 0}[without] {
+			t.Fatalf("without=%v: attachments=%d", without, got)
+		}
+		if without && sent.Full != full {
+			t.Fatalf("text view changed:\n%s\n%s", full, sent.Full)
+		}
+		full = sent.Full
+	}
 }

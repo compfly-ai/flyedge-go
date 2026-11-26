@@ -100,7 +100,21 @@ func (e *HTTPEnforcer) Check(ctx context.Context, req CheckRequest) (Decision, e
 	if err := json.Unmarshal(raw, &cr); err != nil {
 		return Decision{}, fmt.Errorf("enforce: decode response: %w (body: %s)", err, string(raw))
 	}
-	return cr.normalize(), nil
+	dec := cr.normalize()
+	if !knownDecision(cr.Decision) && len(dec.Kills) == 0 {
+		// indeterminate, empty or a verdict this client does not know: not an allow. The Guard
+		// applies its fail mode, as for an unreachable gateway. A kill still enforces.
+		return dec, &UndecidedError{Decision: cr.Decision, Reason: cr.Reason}
+	}
+	return dec, nil
+}
+
+// UndecidedError is returned by Check when the gateway answered without a verdict this client can
+// act on (for example "indeterminate"). The Decision returned alongside carries the server detail.
+type UndecidedError struct{ Decision, Reason string }
+
+func (e *UndecidedError) Error() string {
+	return fmt.Sprintf("enforce: undecided response %q (reason %q)", e.Decision, e.Reason)
 }
 
 // KilledError is returned by Check when the gateway rejects a request with a full-scope kill

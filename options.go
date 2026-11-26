@@ -55,6 +55,13 @@ func WithCloudTelemetry(interval time.Duration) Option {
 	}
 }
 
+// WithoutAttachments keeps inline images and PDFs out of every check this Guard sends: the text
+// view is unchanged and content.attachments is never set. For a host that inspects media through
+// a separate Guard, so each attachment is sent once.
+func WithoutAttachments() Option {
+	return func(g *Guard) error { g.noAttachments = true; return nil }
+}
+
 // WithoutCloudTelemetry disables cloud event delivery and keeps an in-memory Recorder.
 // A custom sink supplied with WithTelemetry still takes precedence.
 func WithoutCloudTelemetry() Option {
@@ -68,13 +75,6 @@ func WithoutCloudTelemetry() Option {
 // WithMode overrides Config.Mode.
 func WithMode(m Mode) Option {
 	return func(g *Guard) error { g.cfg.Mode = m; return nil }
-}
-
-// WithAttachments sends inline images and PDFs with every check, independent of the per-agent
-// nontext_payload setting. For a caller that decides media capture itself, such as flyedged,
-// whose Claude Code plugin is the opt-in.
-func WithAttachments() Option {
-	return func(g *Guard) error { g.nontextAlways = true; return nil }
 }
 
 // WithFailMode overrides Config.FailMode.

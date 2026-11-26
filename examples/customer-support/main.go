@@ -154,7 +154,7 @@ func run() error {
 		w.Write(page)
 	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"ok": true, "name": agentName, "model": modelName, "nontext_allowed": g.NontextPayloadAllowed()})
+		writeJSON(w, 200, map[string]any{"ok": true, "name": agentName, "model": modelName})
 	})
 	mux.HandleFunc("POST /api/chat", s.chat)
 	addr := os.Getenv("AGENT_ADDR")

@@ -143,11 +143,9 @@ func (t *guardRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	// In-band proxy mode: route the ACTUAL call through prism /v1/proxy (prism enforces inline and
 	// forwards to the provider), instead of the out-of-band /check + direct forward.
 	var attachments []Attachment
-	if t.guard.NontextPayloadAllowed() {
-		var structured any
-		if json.Unmarshal(body, &structured) == nil {
-			attachments = ExtractAttachments(structured)
-		}
+	var structured any
+	if !t.guard.noAttachments && json.Unmarshal(body, &structured) == nil {
+		attachments = ExtractAttachments(structured)
 	}
 	proxy := t.guard.ModelMode() != ModelModeCheck
 	if proxy && len(attachments) == 0 {
