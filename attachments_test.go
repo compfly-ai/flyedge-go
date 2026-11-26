@@ -161,6 +161,65 @@ func TestMediaShapeLimitsAndNoLocalResolution(t *testing.T) {
 	}
 }
 
+func zeroPDFBase64(size int) string {
+	return strings.Repeat("A", size/3*4) + []string{"", "AA==", "AAA="}[size%3]
+}
+
+func pdfAttachments(t *testing.T, sizes ...int) []Attachment {
+	t.Helper()
+	var blocks []any
+	for _, size := range sizes {
+		blocks = append(blocks, map[string]any{"type": "input_file", "file_data": "data:application/pdf;base64," + zeroPDFBase64(size)})
+	}
+	items := ExtractAttachments([]any{map[string]any{"role": "user", "content": blocks}})
+	body, _ := json.Marshal(CheckRequest{Content: Content{Full: "read these", Attachments: items}})
+	if len(body) >= 40<<20 {
+		t.Fatalf("check body %d bytes, over Prism's 40 MiB limit", len(body))
+	}
+	return items
+}
+
+func TestFilesUpTo25MiBReachPEAsBytes(t *testing.T) {
+	for _, sizes := range [][]int{{12 << 20}, {25 << 20}, {2621440, 2621440, 2621440, 2621440, 2621440, 2621440, 2621440, 2621440, 2621440, 2621440}} {
+		items := pdfAttachments(t, sizes...)
+		if len(items) != len(sizes) {
+			t.Fatalf("%d attachments for %d files", len(items), len(sizes))
+		}
+		for i, item := range items {
+			if item.DataBase64 != zeroPDFBase64(sizes[i]) || item.Oversize != nil {
+				t.Fatalf("file %d of %d bytes was not sent as bytes", i, sizes[i])
+			}
+		}
+	}
+}
+
+func TestFilesPastTheWireBudgetGoAsFileMarkersPEAccepts(t *testing.T) {
+	marker := func(item Attachment) string {
+		raw, _ := json.Marshal(item)
+		return string(raw)
+	}
+	items := pdfAttachments(t, 25<<20, 10<<20, 3)
+	if len(items) != 3 || items[0].DataBase64 != zeroPDFBase64(25<<20) || items[2].DataBase64 != "AAAA" {
+		t.Fatal("the files that fit must keep their bytes")
+	}
+	if got := marker(items[1]); got != `{"id":"attachment-2","media_type":"application/pdf","data_base64":"","oversize":{"observed_bytes":10485760,"scope":"file"}}` {
+		t.Fatal(got)
+	}
+	items = pdfAttachments(t, 30<<20)
+	if got := marker(items[0]); len(items) != 1 || got != `{"id":"attachment-1","media_type":"application/pdf","data_base64":"","oversize":{"observed_bytes":31457280,"scope":"file"}}` {
+		t.Fatal(got)
+	}
+	sizes := make([]int, maxAttachments+1)
+	for i := range sizes {
+		sizes[i] = 3
+	}
+	items = pdfAttachments(t, sizes...)
+	// PE's validator requires exactly this shape for a count marker.
+	if got := marker(items[0]); len(items) != 1 || got != `{"id":"attachment-count","media_type":"unresolved","data_base64":"","oversize":{"limit_attachments":10,"observed_attachments":11,"scope":"attachment_count"}}` {
+		t.Fatal(got)
+	}
+}
+
 func TestToolMediaSentAsAttachmentNotText(t *testing.T) {
 	rec := &mediaChecker{decision: Decision{Action: ActionAllow}}
 	g := mediaGuard(t, rec, FailOpen)

@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-const mediaTransportLimit = 16 << 20
+// Prism and PE accept a 40 MiB check and PE keeps 1 MiB of it for the rest of the request.
+// 25 MiB of files is about 33.3 MiB as base64.
+const mediaTransportLimit = (40 << 20) - (1 << 20)
+const maxAttachments = 10
 
 var mediaURLPattern = regexp.MustCompile(`(?i)data:(?:image/[\w.+-]+|application/pdf);base64,[A-Za-z0-9+/=\r\n\t ]+`)
 var mediaMIMEPattern = regexp.MustCompile(`(?i)["'](?:media_type|mime_type|mimeType)["']\s*:\s*["'](?:image/[^"']+|application/pdf)["']`)
@@ -41,17 +44,25 @@ func mediaAuditText(text string) string {
 func ExtractAttachments(value any) []Attachment {
 	var items []Attachment
 	nodes, size := 0, 0
-	incomplete, oversize := false, false
+	incomplete, overCount := false, false
 	add := func(mime, data string) {
 		if len(mime) > 128 {
 			mime = "unresolved"
 		}
-		size += len(data) + len(mime) + 100
-		if size > mediaTransportLimit {
-			oversize = true
+		if len(items) >= maxAttachments {
+			overCount = true
 			return
 		}
-		items = append(items, Attachment{ID: fmt.Sprintf("attachment-%d", len(items)+1), MediaType: mime, DataBase64: data})
+		id := fmt.Sprintf("attachment-%d", len(items)+1)
+		if size+len(data)+len(mime)+100 > mediaTransportLimit {
+			// A file that does not fit goes as its own size, so PE still applies each control's
+			// limit and oversize action to it; the files that fit keep their bytes.
+			size += len(mime) + 100
+			items = append(items, Attachment{ID: id, MediaType: mime, Oversize: map[string]any{"scope": "file", "observed_bytes": decodedSize(data)}})
+			return
+		}
+		size += len(data) + len(mime) + 100
+		items = append(items, Attachment{ID: id, MediaType: mime, DataBase64: data})
 	}
 	url := func(value any) {
 		if m, ok := value.(map[string]any); ok {
@@ -66,7 +77,7 @@ func ExtractAttachments(value any) []Attachment {
 	}
 	var walk func(any, int)
 	walk = func(v any, depth int) {
-		if oversize {
+		if overCount {
 			return
 		}
 		nodes++
@@ -125,13 +136,25 @@ func ExtractAttachments(value any) []Attachment {
 		}
 	}
 	walk(value, 0)
-	if oversize {
-		return []Attachment{{ID: "provider-request", MediaType: "unresolved", Oversize: map[string]any{"scope": "provider_request", "encoded_bytes": size}}}
+	if overCount {
+		return []Attachment{{ID: "attachment-count", MediaType: "unresolved", Oversize: map[string]any{"scope": "attachment_count", "observed_attachments": len(items) + 1, "limit_attachments": maxAttachments}}}
 	}
 	if incomplete {
 		items = append(items, Attachment{ID: "incomplete", MediaType: "unresolved"})
 	}
 	return items
+}
+
+func decodedSize(data string) int {
+	symbols := 0
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case '=', '\r', '\n', '\t', ' ':
+		default:
+			symbols++
+		}
+	}
+	return symbols * 3 / 4
 }
 
 // policyValue creates a text-only inspection view; original provider/tool objects remain untouched.
